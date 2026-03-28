@@ -58,8 +58,173 @@
     const sensitiveKeywords = ['薪资', '工资', '底薪', '提成能谈吗', '期权', '股权', '竞业协议', '背景调查', '离职证明', 'offer催一下', '能不能快点', '比较急', '你们面试官怎么样'];
 
     const emotionKeywords = {
-      negative: ['不满', '太差', '失望', '投诉', '垃圾', '废物', '没用', '浪费时间'],
-      urgent: ['急', '非常急', '马上', '立刻', '赶紧']
+      negative: ['不满', '太差', '失望', '投诉', '垃圾', '废物', '没用', '浪费时间', '黑心', '坑', '骗子'],
+      urgent: ['急', '非常急', '马上', '立刻', '赶紧', '很急', '快', '快点'],
+      questionIndicators: ['怎么', '如何', '为什么', '是不是', '能不能', '可以吗', '多少', '几轮', '什么', '哪']
+    };
+    
+    // 人工参与必要性分析关键词
+    const humanNecessityKeywords = {
+      // 高必要性 - 涉及敏感信息
+      sensitive: ['薪资', '工资', '底薪', '提成', '期权', '股权', '股票', '奖金', '年终奖', '报销', '赔偿', '违约金', '竞业协议', '保密协议', '背景调查', 'offer', '录用通知'],
+      // 高必要性 - 涉及法律合规
+      legal: ['合同', '劳动法', '仲裁', '起诉', '投诉', '举报', '维权', '工伤', '辞退', '裁员', '开除', '不续约'],
+      // 高必要性 - 涉及个人情况
+      personal: ['我', '我的', 'offer', '面试', '笔试', '背调', '谈薪', '沟通过'],
+      // 中必要性 - 需要人工判断
+      judgement: ['情况', '特殊', '可以', '能不能', '允许', '批准', '申请', '通融'],
+      // 低必要性 - 一般咨询
+      general: ['公司', '岗位', '职位', '福利', '假期', '五险一金', '面试流程', '入职', '报销']
+    };
+    
+    // 问题复杂度分析
+    const questionComplexityKeywords = {
+      // 简单 - 一问一答
+      simple: ['几轮', '多久', '多少', '在哪里', '什么时候', '谁', '什么时间'],
+      // 中等 - 需要解释
+      medium: ['为什么', '怎么', '如何', '流程', '规则', '制度', '政策'],
+      // 复杂 - 需要综合判断
+      complex: ['情况', '特殊', '能否', '申请', '通融', '例外', '帮忙', '问一下']
+    };
+    
+    // 分析问题特征
+    const analyzeQuestion = (query) => {
+      const queryLower = query.toLowerCase();
+      const analysis = {
+        hasSensitive: false,
+        hasLegal: false,
+        hasPersonal: false,
+        needsJudgement: false,
+        hasEmotionNegative: false,
+        hasEmotionUrgent: false,
+        complexity: 'simple', // simple, medium, complex
+        isQuestion: false,
+        intentCategory: 'general', // general, sensitive, legal, personal, complaint
+        suggestion: '',
+        humanNecessityScore: 0, // 0-100
+        humanNecessityLevel: 'low', // low, medium, high, urgent
+        reason: []
+      };
+      
+      // 检测敏感词
+      for (const keyword of humanNecessityKeywords.sensitive) {
+        if (queryLower.includes(keyword)) {
+          analysis.hasSensitive = true;
+          analysis.intentCategory = 'sensitive';
+          analysis.humanNecessityScore += 35;
+          analysis.reason.push('涉及薪资/福利等敏感信息');
+          break;
+        }
+      }
+      
+      // 检测法律相关
+      for (const keyword of humanNecessityKeywords.legal) {
+        if (queryLower.includes(keyword)) {
+          analysis.hasLegal = true;
+          analysis.intentCategory = 'legal';
+          analysis.humanNecessityScore += 40;
+          analysis.reason.push('涉及法律合规问题');
+          break;
+        }
+      }
+      
+      // 检测个人情况
+      for (const keyword of humanNecessityKeywords.personal) {
+        if (queryLower.includes(keyword)) {
+          analysis.hasPersonal = true;
+          if (analysis.intentCategory === 'general') analysis.intentCategory = 'personal';
+          analysis.humanNecessityScore += 20;
+          analysis.reason.push('涉及个人具体情况');
+          break;
+        }
+      }
+      
+      // 检测需要判断
+      for (const keyword of humanNecessityKeywords.judgement) {
+        if (queryLower.includes(keyword)) {
+          analysis.needsJudgement = true;
+          analysis.complexity = 'complex';
+          analysis.humanNecessityScore += 15;
+          analysis.reason.push('需要人工综合判断');
+          break;
+        }
+      }
+      
+      // 检测负面情绪
+      for (const keyword of emotionKeywords.negative) {
+        if (queryLower.includes(keyword)) {
+          analysis.hasEmotionNegative = true;
+          analysis.humanNecessityScore += 15;
+          analysis.reason.push('检测到负面情绪');
+          break;
+        }
+      }
+      
+      // 检测紧急程度
+      for (const keyword of emotionKeywords.urgent) {
+        if (queryLower.includes(keyword)) {
+          analysis.hasEmotionUrgent = true;
+          analysis.humanNecessityScore += 10;
+          analysis.reason.push('用户表达紧急需求');
+          break;
+        }
+      }
+      
+      // 分析问题复杂度
+      for (const keyword of questionComplexityKeywords.complex) {
+        if (queryLower.includes(keyword)) {
+          analysis.complexity = 'complex';
+          break;
+        }
+      }
+      for (const keyword of questionComplexityKeywords.medium) {
+        if (queryLower.includes(keyword)) {
+          if (analysis.complexity === 'simple') analysis.complexity = 'medium';
+          break;
+        }
+      }
+      
+      // 检测问句
+      for (const keyword of emotionKeywords.questionIndicators) {
+        if (queryLower.includes(keyword)) {
+          analysis.isQuestion = true;
+          break;
+        }
+      }
+      
+      // 判断意图类别
+      if (analysis.hasEmotionNegative && !analysis.hasSensitive && !analysis.hasLegal) {
+        analysis.intentCategory = 'complaint';
+      }
+      
+      // 生成建议
+      if (analysis.hasLegal) {
+        analysis.suggestion = '建议转人工处理，涉及法律合规问题需专业解答';
+      } else if (analysis.hasSensitive) {
+        analysis.suggestion = '建议转人工处理，涉及敏感信息需HR确认';
+      } else if (analysis.hasEmotionNegative) {
+        analysis.suggestion = '建议优先转人工，疏导用户情绪并解决问题';
+      } else if (analysis.needsJudgement || analysis.hasPersonal) {
+        analysis.suggestion = '建议转人工，需根据具体情况判断';
+      } else if (analysis.hasEmotionUrgent) {
+        analysis.suggestion = '建议优先响应，可先AI回复再跟进人工确认';
+      } else {
+        analysis.suggestion = '可由AI先回复，如用户不满意再转人工';
+      }
+      
+      // 确定人工必要性等级
+      if (analysis.humanNecessityScore >= 70 || analysis.hasLegal) {
+        analysis.humanNecessityLevel = 'urgent';
+        analysis.humanNecessityScore = Math.min(100, analysis.humanNecessityScore);
+      } else if (analysis.humanNecessityScore >= 50) {
+        analysis.humanNecessityLevel = 'high';
+      } else if (analysis.humanNecessityScore >= 25) {
+        analysis.humanNecessityLevel = 'medium';
+      } else {
+        analysis.humanNecessityLevel = 'low';
+      }
+      
+      return analysis;
     };
 
     const quickQuestions = {
@@ -112,6 +277,104 @@
         });
       }
       return data;
+    };
+    
+    // ==================== 通知渠道配置 ====================
+    const NOTIFICATION_CHANNELS = [
+      { id: 'wechat', name: '企业微信', icon: 'wechat', color: 'green', description: '通过企业微信应用推送通知' },
+      { id: 'dingtalk', name: '钉钉', icon: 'dingtalk', color: 'blue', description: '通过钉钉机器人推送通知' },
+      { id: 'feishu', name: '飞书', icon: 'feishu', color: 'blue', description: '通过飞书机器人推送通知' },
+      { id: 'email', name: '邮件', icon: 'email', color: 'gray', description: '通过邮件发送通知' },
+      { id: 'webhook', name: '自定义 Webhook', icon: 'webhook', color: 'purple', description: '通过自定义 Webhook URL 推送' }
+    ];
+    
+    // 通知触发规则配置
+    const NOTIFICATION_RULES = [
+      { id: 'urgent', name: '紧急问题', level: 'urgent', score: 70, description: '人工必要性 ≥ 70分' },
+      { id: 'high', name: '高优先级', level: 'high', score: 50, description: '人工必要性 ≥ 50分' },
+      { id: 'sensitive', name: '敏感信息', level: 'sensitive', score: 0, description: '涉及敏感关键词' },
+      { id: 'emotion', name: '情绪异常', level: 'emotion', score: 0, description: '检测到负面/紧急情绪' }
+    ];
+    
+    // 加载通知配置
+    const loadNotificationConfig = () => {
+      try {
+        const saved = localStorage.getItem('hr-notification-config');
+        if (saved) {
+          return JSON.parse(saved);
+        }
+      } catch (e) {}
+      return {
+        enabled: true,
+        channels: [], // 已启用的渠道ID列表
+        rules: ['urgent', 'high', 'sensitive'], // 触发的规则
+        webhookUrl: '',
+        emailAddress: 'hr@company.com',
+        notifyOnKnowledgeBaseMiss: true // 知识库无匹配时通知
+      };
+    };
+    
+    // 保存通知配置
+    const saveNotificationConfig = (config) => {
+      try {
+        localStorage.setItem('hr-notification-config', JSON.stringify(config));
+      } catch (e) {}
+    };
+    
+    // 发送通知（模拟实现）
+    const sendNotification = async (config, item) => {
+      const results = [];
+      
+      for (const channelId of config.channels) {
+        const channel = NOTIFICATION_CHANNELS.find(c => c.id === channelId);
+        if (!channel) continue;
+        
+        try {
+          // 构造通知内容
+          const content = {
+            title: `【HR助手】新问题待处理 - ${item.humanNecessityLevel === 'urgent' ? '🚨紧急' : item.humanNecessityLevel === 'high' ? '⚠️高优先级' : '📋中等'}`,
+            question: item.question,
+            position: item.position,
+            score: item.humanNecessityScore,
+            level: item.humanNecessityLevel,
+            analysis: item.context,
+            time: item.created_at,
+            url: window.location.href
+          };
+          
+          // 根据渠道类型构造消息
+          let message = '';
+          if (channelId === 'webhook' && config.webhookUrl) {
+            // 自定义 Webhook
+            message = JSON.stringify(content);
+          } else if (channelId === 'email' && config.emailAddress) {
+            message = `主题: ${content.title}\n\n问题: ${content.question}\n岗位: ${content.position}\n人工必要性: ${content.score}分\n分析: ${content.analysis}\n时间: ${content.time}`;
+          } else {
+            // 企业微信/钉钉/飞书 格式化消息
+            message = `${content.title}\n\n❓ 问题：${content.question}\n📂 岗位：${content.position}\n📊 人工必要性：${content.score}分 (${content.level === 'urgent' ? '紧急' : content.level === 'high' ? '高' : '中'})\n🔍 分析：${content.analysis}\n⏰ 时间：${content.time}`;
+          }
+          
+          // 模拟发送（实际需要后端或真实Webhook）
+          console.log(`[通知发送] 渠道: ${channel.name}`, message);
+          
+          // 如果配置了真实Webhook URL，尝试发送
+          if (channelId === 'webhook' && config.webhookUrl) {
+            try {
+              // 在实际环境中，这里会调用真实API
+              // await fetch(config.webhookUrl, { method: 'POST', body: message });
+              results.push({ channel: channel.name, status: 'success', message: '已发送至 Webhook' });
+            } catch (e) {
+              results.push({ channel: channel.name, status: 'error', message: '发送失败: ' + e.message });
+            }
+          } else {
+            results.push({ channel: channel.name, status: 'success', message: '已记录发送任务' });
+          }
+        } catch (e) {
+          results.push({ channel: channel.name, status: 'error', message: '处理失败' });
+        }
+      }
+      
+      return results;
     };
 
     // ==================== 存储层 ====================
@@ -179,14 +442,266 @@
         chevronDown: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>,
         refresh: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>,
         export: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
+        bell: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>,
       };
       return icons[name] || icons.message;
     };
 
+
+    // ==================== 管理员账号配置 ====================
+    const getAdminPassword = () => localStorage.getItem('hr-admin-password') || 'admin123';
+    const ADMIN_CREDENTIALS = {
+      username: 'admin',
+      getPassword: getAdminPassword
+    };
+
+    // ==================== 登录组件 ====================
+    function LoginModal({ onLogin, onClose }) {
+      const [username, setUsername] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [showPassword, setShowPassword] = useState(false);
+      
+      // 检查是否是首次登录
+      const isFirstLogin = !localStorage.getItem('hr-admin-password');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+
+        setTimeout(() => {
+          if (username === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.getPassword()) {
+            localStorage.setItem('hr-admin-logged-in', 'true');
+            localStorage.setItem('hr-admin-username', username);
+            // 如果是首次登录且未设置过密码，设置默认密码到localStorage
+            if (!localStorage.getItem('hr-admin-password')) {
+              localStorage.setItem('hr-admin-password', 'admin123');
+            }
+            onLogin(username);
+          } else {
+            setError('用户名或密码错误，请重试');
+          }
+          setLoading(false);
+        }, 500);
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden animate-slide-up">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white text-center">
+              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Icon name="lock" className="w-8 h-8" />
+              </div>
+              <h2 className="text-xl font-bold">管理员登录</h2>
+              <p className="text-blue-100 text-sm mt-1">
+                {isFirstLogin ? '首次登录，请使用默认账号密码' : '请输入管理员账号访问后台'}
+              </p>
+            </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">用户名</label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="请输入用户名"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">密码</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10"
+                    placeholder="请输入密码"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <Icon name={showPassword ? 'eye' : 'eye'} className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+              {error && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm flex items-center gap-2">
+                  <Icon name="alert" className="w-4 h-4" />
+                  {error}
+                </div>
+              )}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex-1 px-4 py-2.5 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      验证中...
+                    </>
+                  ) : '登录'}
+                </button>
+              </div>
+              <div className={`text-center text-xs mt-4 p-3 rounded-lg ${isFirstLogin ? 'bg-amber-50 text-amber-700' : 'text-slate-400'}`}>
+                {isFirstLogin ? (
+                  <div className="flex items-center gap-2 justify-center">
+                    <Icon name="alert" className="w-4 h-4" />
+                    <span>首次登录：账号 <strong>admin</strong> / 密码 <strong>admin123</strong></span>
+                  </div>
+                ) : (
+                  <span>默认账号：admin / {ADMIN_CREDENTIALS.getPassword() === 'admin123' ? 'admin123' : '已修改'}</span>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // ==================== 修改密码组件 ====================
+    function ChangePasswordModal({ onClose }) {
+      const [currentPassword, setCurrentPassword] = useState('');
+      const [newPassword, setNewPassword] = useState('');
+      const [confirmPassword, setConfirmPassword] = useState('');
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [success, setSuccess] = useState(false);
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        setError('');
+
+        if (currentPassword !== ADMIN_CREDENTIALS.getPassword()) {
+          setError('当前密码错误');
+          return;
+        }
+
+        if (newPassword.length < 6) {
+          setError('新密码长度不能少于6位');
+          return;
+        }
+
+        if (newPassword !== confirmPassword) {
+          setError('两次输入的新密码不一致');
+          return;
+        }
+
+        setLoading(true);
+        setTimeout(() => {
+          localStorage.setItem('hr-admin-password', newPassword);
+          setSuccess(true);
+          setLoading(false);
+          setTimeout(onClose, 1500);
+        }, 500);
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white text-center">
+              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Icon name="lock" className="w-8 h-8" />
+              </div>
+              <h2 className="text-xl font-bold">修改密码</h2>
+              <p className="text-blue-100 text-sm mt-1">请输入以下信息完成密码修改</p>
+            </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              {success ? (
+                <div className="text-center py-4">
+                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <Icon name="check" className="w-8 h-8 text-green-600" />
+                  </div>
+                  <p className="text-green-600 font-medium">密码修改成功！</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">当前密码</label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="请输入当前密码"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">新密码</label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="请输入新密码（至少6位）"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">确认新密码</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="请再次输入新密码"
+                      required
+                    />
+                  </div>
+                  {error && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                      {error}
+                    </div>
+                  )}
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="flex-1 px-4 py-2.5 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {loading ? '修改中...' : '确认修改'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </form>
+          </div>
+        </div>
+      );
+    }
+
     // ==================== 主应用 ====================
     function App() {
-      const [activeTab, setActiveTab] = useState('candidate');
+      const [currentView, setCurrentView] = useState('candidate'); // 'candidate' | 'admin'
+      const [adminSection, setAdminSection] = useState('dashboard'); // 'dashboard' | 'review' | 'knowledge' | 'logs'
       const [appData, setAppData] = useState(loadData);
+      const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('hr-admin-logged-in') === 'true');
+      const [showLoginModal, setShowLoginModal] = useState(false);
+      const [showPasswordModal, setShowPasswordModal] = useState(false);
+      const [sidebarOpen, setSidebarOpen] = useState(false);
 
       useEffect(() => {
         saveData(appData);
@@ -207,65 +722,198 @@
             time: new Date().toLocaleString('zh-CN'),
             type,
             detail,
-            operator: 'admin'
+            operator: localStorage.getItem('hr-admin-username') || 'admin'
           }].slice(-100)
         }));
       };
 
+      const handleLogin = (username) => {
+        setIsLoggedIn(true);
+        setShowLoginModal(false);
+        setCurrentView('admin');
+        addLog('登录', `管理员 ${username} 登录系统`);
+      };
+
+      const handleLogout = () => {
+        localStorage.removeItem('hr-admin-logged-in');
+        localStorage.removeItem('hr-admin-username');
+        setIsLoggedIn(false);
+        setCurrentView('candidate');
+        addLog('登出', '管理员退出登录');
+      };
+
+      const handleAdminClick = () => {
+        if (currentView === 'admin') {
+          // 已经在管理后台，返回候选人端
+          setCurrentView('candidate');
+        } else if (isLoggedIn) {
+          // 未在管理后台但已登录，进入管理后台
+          setCurrentView('admin');
+        } else {
+          // 未登录，弹出登录框
+          setShowLoginModal(true);
+        }
+      };
+
+      // 管理员侧边栏菜单项 - 计算审核队列紧急数量
+      const urgentCount = appData.reviewQueue?.filter(r => r.humanNecessityLevel === 'urgent' || r.humanNecessityLevel === 'high').length || 0;
+      const adminMenuItems = [
+        { id: 'dashboard', label: '效果看板', icon: 'chart' },
+        { id: 'review', label: '审核队列', icon: 'alert', badge: appData.reviewQueue?.length || 0, urgentBadge: urgentCount },
+        { id: 'knowledge', label: '知识库', icon: 'database' },
+        { id: 'notification', label: '通知设置', icon: 'bell' },
+        { id: 'logs', label: '操作日志', icon: 'clock' }
+      ];
+
       return (
-        <div className="min-h-screen">
-          <header className="bg-white border-b sticky top-0 z-50">
-            <div className="max-w-7xl mx-auto px-4 md:px-6 py-4">
+        <div className="min-h-screen bg-slate-50">
+          {/* 头部 */}
+          <header className="bg-white border-b border-slate-200/60 sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center">
+                  {/* 移动端菜单按钮 */}
+                  <button 
+                    onClick={() => setSidebarOpen(!sidebarOpen)}
+                    className="lg:hidden p-2 rounded-lg hover:bg-slate-100"
+                  >
+                    <Icon name={sidebarOpen ? 'x' : 'menu'} className="w-5 h-5" />
+                  </button>
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center shadow-lg shadow-primary-500/20">
                     <Icon name="sparkles" className="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-bold text-slate-800">HR AI 智能助手</h1>
-                    <p className="text-xs text-slate-500">智能答疑 · 高效招聘</p>
+                    <h1 className="text-base font-semibold text-slate-800">HR AI 智能助手</h1>
+                    <p className="text-xs text-slate-400 hidden sm:block">智能答疑 · 高效招聘</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="hidden sm:flex items-center gap-2 text-sm text-slate-600">
-                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                <div className="flex items-center gap-2 sm:gap-4">
+                  <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
                     <span>系统运行正常</span>
                   </div>
+                  <button 
+                    onClick={handleAdminClick}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-all"
+                  >
+                    <Icon name="settings" className="w-4 h-4" />
+                    <span>管理后台</span>
+                  </button>
                 </div>
               </div>
             </div>
           </header>
 
-          <div className="bg-white border-b">
-            <div className="max-w-7xl mx-auto px-4 md:px-6">
-              <nav className="flex gap-1 overflow-x-auto">
-                {[
-                  { id: 'candidate', label: '候选人端', icon: 'message' },
-                  { id: 'hr-admin', label: 'HR管理后台', icon: 'settings' },
-                  { id: 'dashboard', label: '效果看板', icon: 'chart' }
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${
-                      activeTab === tab.id
-                        ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-slate-600 hover:text-slate-800'
-                    }`}
-                  >
-                    <Icon name={tab.icon} className="w-4 h-4" />
-                    {tab.label}
-                  </button>
-                ))}
-              </nav>
-            </div>
-          </div>
-
-          <main className="max-w-7xl mx-auto px-4 md:px-6 py-6">
-            {activeTab === 'candidate' && <CandidatePortal appData={appData} updateAppData={updateAppData} />}
-            {activeTab === 'hr-admin' && <HRAdmin appData={appData} updateAppData={updateAppData} addLog={addLog} />}
-            {activeTab === 'dashboard' && <Dashboard appData={appData} />}
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+            {/* 移动端侧边栏遮罩 */}
+            <div 
+              className={`mobile-overlay fixed inset-0 bg-black/50 z-30 ${sidebarOpen ? 'block' : 'hidden'}`}
+              onClick={() => setSidebarOpen(false)}
+            ></div>
+            
+            {currentView === 'candidate' ? (
+              <CandidatePortal appData={appData} updateAppData={updateAppData} />
+            ) : (
+              <div className="flex gap-6">
+                {/* 侧边栏 */}
+                <aside className={`w-56 flex-shrink-0 ${sidebarOpen ? 'block' : 'hidden'} lg:block`}>
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden sticky top-24">
+                    <div className="p-4 border-b border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-primary-100 flex items-center justify-center text-primary-600 font-semibold">
+                          管
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">管理员</p>
+                          <p className="text-xs text-slate-500">HR Manager</p>
+                        </div>
+                      </div>
+                    </div>
+                    <nav className="p-2">
+                      {adminMenuItems.map(item => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setAdminSection(item.id);
+                            setSidebarOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all mb-0.5 ${
+                            adminSection === item.id 
+                              ? 'bg-primary-50 text-primary-600 font-medium' 
+                              : 'text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          <Icon name={item.icon} className="w-4 h-4" />
+                          <span>{item.label}</span>
+                          {item.badge > 0 && (
+                            <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full min-w-[20px] text-center ${
+                              item.urgentBadge > 0 ? 'bg-red-500 text-white' : 'bg-red-500 text-white'
+                            }`}>
+                              {item.urgentBadge > 0 ? `${item.urgentBadge}!` : item.badge}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                      <div className="border-t border-slate-100 my-2"></div>
+                      <button
+                        onClick={() => setShowPasswordModal(true)}
+                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-slate-500 hover:bg-blue-50 hover:text-blue-600 transition-all"
+                      >
+                        <Icon name="lock" className="w-4 h-4" />
+                        <span>修改密码</span>
+                      </button>
+                      <button
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
+                      >
+                        <Icon name="arrowRight" className="w-4 h-4 rotate-180" />
+                        <span>退出登录</span>
+                      </button>
+                    </nav>
+                  </div>
+                </aside>
+                
+                {/* 主内容 */}
+                <div className="flex-1 min-w-0">
+                  {adminSection === 'dashboard' && <Dashboard appData={appData} />}
+                  {adminSection === 'review' && (
+                    <ReviewQueuePanel 
+                      appData={appData} 
+                      updateAppData={updateAppData} 
+                      addLog={addLog}
+                      setAdminSection={setAdminSection}
+                    />
+                  )}
+                  {adminSection === 'knowledge' && (
+                    <KnowledgeBasePanel 
+                      appData={appData} 
+                      updateAppData={updateAppData} 
+                      addLog={addLog}
+                    />
+                  )}
+                  {adminSection === 'notification' && (
+                    <NotificationPanel 
+                      addLog={addLog}
+                    />
+                  )}
+                  {adminSection === 'logs' && <OperationLogsPanel appData={appData} />}
+                </div>
+              </div>
+            )}
           </main>
+
+          {showLoginModal && (
+            <LoginModal 
+              onLogin={handleLogin} 
+              onClose={() => setShowLoginModal(false)} 
+            />
+          )}
+
+          {showPasswordModal && (
+            <ChangePasswordModal 
+              onClose={() => setShowPasswordModal(false)} 
+            />
+          )}
         </div>
       );
     }
@@ -290,17 +938,42 @@
         scrollToBottom();
       }, [messages]);
 
+      // 转人工处理
+      const handleTransferToHuman = () => {
+        const humanMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: '🔔 您已成功转接 HR 专员！\n\n我们的 HR 同事将会尽快处理您的问题，请稍候。通常响应时间为 5-10 分钟。\n\n感谢您的耐心等待！',
+          timestamp: new Date(),
+          metadata: { confidence: 100, category: '转人工', needs_human: true, humanNecessityScore: 100, humanNecessityLevel: 'urgent' }
+        };
+        setMessages(prev => [...prev, humanMessage]);
+        updateAppData(prev => ({
+          ...prev,
+          stats: { ...prev.stats, humanHandled: prev.stats.humanHandled + 1 }
+        }));
+      };
+
       const searchKnowledgeBase = (query) => {
         const queryLower = query.toLowerCase();
 
+        // 先进行问题分析（用于人工必要性评分）
+        const questionAnalysis = analyzeQuestion(query);
+
         for (const keyword of sensitiveKeywords) {
           if (queryLower.includes(keyword)) {
-            return { type: 'sensitive', answer: '这个问题涉及较敏感的信息，我已为您转接 HR 专员，预计 5 分钟内回复您。💬\n\n建议您也可以直接联系 HR：hr@company.com' };
+            return { 
+              type: 'sensitive', 
+              answer: '这个问题涉及较敏感的信息，我已为您转接 HR 专员，预计 5 分钟内回复您。💬\n\n建议您也可以直接联系 HR：hr@company.com',
+              confidence: 50,
+              questionAnalysis
+            };
           }
         }
 
         let bestMatch = null;
         let bestScore = 0;
+        let matchedWords = []; // 记录匹配的关键词
 
         for (const item of knowledgeBase) {
           if (item.applicable_positions[0] !== 'all' && !item.applicable_positions.includes(selectedPosition)) continue;
@@ -309,29 +982,115 @@
             let score = 0;
             const variantLower = variant.toLowerCase();
             const queryWords = queryLower.split(/\s+/);
+            const currentMatchedWords = [];
 
             for (const word of queryWords) {
-              if (variantLower.includes(word) || queryLower.includes(word)) score += 10;
+              if (variantLower.includes(word) || queryLower.includes(word)) {
+                score += 10;
+                currentMatchedWords.push(word);
+              }
             }
-            if (variantLower.includes(queryLower) || queryLower.includes(variantLower)) score += 20;
+            
+            // 完整包含查询短语
+            if (variantLower.includes(queryLower) || queryLower.includes(variantLower)) {
+              score += 30;
+            }
+            
+            // 如果是多字词组匹配，加更多分
+            if (queryWords.length > 1) {
+              // 多字词组中匹配到一半以上
+              const halfMatch = currentMatchedWords.filter(w => variantLower.includes(w)).length;
+              if (halfMatch >= queryWords.length * 0.5) {
+                score += 15;
+              }
+            }
 
             if (score > bestScore) {
               bestScore = score;
               bestMatch = item;
+              matchedWords = currentMatchedWords;
             }
           }
         }
 
-        if (bestMatch && bestScore >= 10) {
+        // 更严格的匹配判断：需要匹配分数 >= 25 且至少匹配了查询的50%或包含完整短语
+        const queryWordsCount = queryLower.split(/\s+/).length;
+        const matchRatio = matchedWords.length / Math.max(1, queryWordsCount);
+        
+        // 检查是否完整短语匹配（查询包含知识库词条，或词条包含查询）
+        const isExactMatch = bestMatch?.question_variants.some(v => 
+          queryLower.includes(v.toLowerCase()) || v.toLowerCase().includes(queryLower)
+        );
+
+        if (bestMatch && (isExactMatch || (bestScore >= 25 && matchRatio >= 0.5))) {
           const confidence = Math.min(95, bestScore + 60);
-          return { type: confidence < 70 ? 'low_confidence' : 'success', answer: bestMatch.standard_answer, confidence, category: bestMatch.category };
+          return { 
+            type: confidence < 70 ? 'low_confidence' : 'success', 
+            answer: bestMatch.standard_answer, 
+            confidence, 
+            category: bestMatch.category,
+            questionAnalysis
+          };
         }
 
-        return { type: 'no_match', answer: '抱歉，关于这个问题我暂时没有准确的信息。\n\n已为您转接 HR 专员，预计 5 分钟内给您专业解答。', confidence: 30 };
+        // 无匹配时，直接标记为需要人工处理（知识库没有的都要人工）
+        // 基于问题分析增强评分
+        const finalScore = Math.max(questionAnalysis.humanNecessityScore, 60); // 无匹配至少60分
+        const finalLevel = finalScore >= 70 ? 'urgent' : finalScore >= 50 ? 'high' : 'medium';
+        
+        const levelIcon = finalLevel === 'urgent' ? '🚨' : finalLevel === 'high' ? '⚠️' : '⚡';
+        const levelText = finalLevel === 'urgent' ? '紧急' : finalLevel === 'high' ? '高' : '中';
+        const levelColor = finalLevel === 'urgent' ? 'red' : finalLevel === 'high' ? 'amber' : 'blue';
+
+        let answerContent = `📋 **问题已记录 - 知识库暂无此条目**\n\n`;
+        
+        // 添加问题分析结果
+        if (questionAnalysis.reason.length > 0) {
+          answerContent += `**问题分析**：${questionAnalysis.reason.join('、')}\n\n`;
+        }
+        
+        // 添加人工必要性评分
+        answerContent += `${levelIcon} **人工参与必要性**：${levelText}（${finalScore}分/100分）\n\n`;
+        answerContent += `💡 您的疑问已转交 HR 专员处理，预计 5-10 分钟内给您专业解答。\n\n`;
+        answerContent += `📧 如需紧急处理，请联系：hr@company.com`;
+
+        return { 
+          type: 'no_match', 
+          answer: answerContent,
+          confidence: 30,
+          questionAnalysis: {
+            ...questionAnalysis,
+            humanNecessityScore: finalScore,
+            humanNecessityLevel: finalLevel,
+            fromKnowledgeBase: false // 标记为知识库无匹配
+          }
+        };
       };
 
       const handleSend = () => {
         if (!inputValue.trim()) return;
+
+        // 检测"转人工"
+        if (inputValue.includes('转人工')) {
+          const userMessage = { id: Date.now().toString(), role: 'user', content: inputValue, timestamp: new Date() };
+          setMessages(prev => [...prev, userMessage]);
+          setInputValue('');
+          setTimeout(() => {
+            const humanMessage = {
+              id: (Date.now() + 1).toString(),
+              role: 'assistant',
+              content: '🔔 您已成功转接 HR 专员！\n\n我们的 HR 同事将会尽快处理您的问题，请稍候。通常响应时间为 5-10 分钟。\n\n感谢您的耐心等待！',
+              timestamp: new Date(),
+              metadata: { confidence: 100, category: '转人工', needs_human: true, humanNecessityScore: 100, humanNecessityLevel: 'urgent' }
+            };
+            setMessages(prev => [...prev, humanMessage]);
+            updateAppData(prev => ({
+              ...prev,
+              stats: { ...prev.stats, humanHandled: prev.stats.humanHandled + 1 }
+            }));
+          }, 500);
+          return;
+        }
 
         const userMessage = { id: Date.now().toString(), role: 'user', content: inputValue, timestamp: new Date() };
         setMessages(prev => [...prev, userMessage]);
@@ -342,6 +1101,9 @@
           const result = searchKnowledgeBase(inputValue);
           let aiContent = result.answer;
           let needsHuman = result.type === 'no_match' || result.type === 'sensitive' || result.type === 'low_confidence';
+          
+          // 获取问题分析结果
+          const questionAnalysis = result.questionAnalysis || { humanNecessityScore: 30, humanNecessityLevel: 'low', reason: [] };
 
           if (result.type === 'low_confidence') {
             aiContent += '\n\n⚠️ 系统已标记此答案为低置信度，将由 HR 审核后确认。';
@@ -352,7 +1114,14 @@
             role: 'assistant',
             content: aiContent,
             timestamp: new Date(),
-            metadata: { confidence: result.confidence, category: result.category || '未分类', needs_human: needsHuman }
+            metadata: { 
+              confidence: result.confidence, 
+              category: result.category || '未分类', 
+              needs_human: needsHuman,
+              humanNecessityScore: questionAnalysis.humanNecessityScore,
+              humanNecessityLevel: questionAnalysis.humanNecessityLevel,
+              intentCategory: questionAnalysis.intentCategory
+            }
           };
 
           setMessages(prev => [...prev, aiMessage]);
@@ -370,20 +1139,52 @@
             }
           }));
 
-          // 如果是低置信度或无匹配，添加到审核队列
-          if (needsHuman) {
+          // 如果是无匹配、低置信度或高人工必要性，添加到审核队列并发送通知
+          if (needsHuman || questionAnalysis.humanNecessityLevel === 'urgent' || questionAnalysis.humanNecessityLevel === 'high') {
+            const newItem = {
+              id: 'RQ-' + Date.now(),
+              question: inputValue,
+              context: questionAnalysis.reason.join('、') || '用户提问',
+              position: selectedPosition,
+              confidence: result.confidence,
+              status: 'pending',
+              created_at: new Date().toLocaleString('zh-CN'),
+              humanNecessityScore: questionAnalysis.humanNecessityScore,
+              humanNecessityLevel: questionAnalysis.humanNecessityLevel,
+              intentCategory: questionAnalysis.intentCategory,
+              suggestion: questionAnalysis.suggestion,
+              emotions: {
+                negative: questionAnalysis.hasEmotionNegative,
+                urgent: questionAnalysis.hasEmotionUrgent
+              }
+            };
+            
             updateAppData(prev => ({
               ...prev,
-              reviewQueue: [...prev.reviewQueue, {
-                id: 'RQ-' + Date.now(),
-                question: inputValue,
-                context: '用户提问',
-                position: selectedPosition,
-                confidence: result.confidence,
-                status: 'pending',
-                created_at: new Date().toLocaleString('zh-CN')
-              }]
+              reviewQueue: [...prev.reviewQueue, newItem]
             }));
+            
+            // 自动发送通知
+            const notifyConfig = loadNotificationConfig();
+            if (notifyConfig.enabled && notifyConfig.channels.length > 0) {
+              // 检查是否满足触发规则
+              const shouldNotify = (
+                (notifyConfig.rules.includes('urgent') && questionAnalysis.humanNecessityLevel === 'urgent') ||
+                (notifyConfig.rules.includes('high') && questionAnalysis.humanNecessityLevel === 'high') ||
+                (notifyConfig.rules.includes('sensitive') && result.type === 'sensitive') ||
+                (notifyConfig.rules.includes('emotion') && (questionAnalysis.hasEmotionNegative || questionAnalysis.hasEmotionUrgent)) ||
+                (notifyConfig.notifyOnKnowledgeBaseMiss && result.type === 'no_match')
+              );
+              
+              if (shouldNotify) {
+                // 异步发送通知（不阻塞UI）
+                sendNotification(notifyConfig, newItem).then(results => {
+                  console.log('[通知] 发送结果:', results);
+                }).catch(err => {
+                  console.error('[通知] 发送失败:', err);
+                });
+              }
+            }
           }
 
           // 对话2轮后显示评价
@@ -435,7 +1236,7 @@
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4 chat-scroll">
                 {messages.map(message => (
-                  <MessageBubble key={message.id} message={message} />
+                  <MessageBubble key={message.id} message={message} onTransferHuman={handleTransferToHuman} />
                 ))}
                 {isTyping && (
                   <div className="flex gap-3 animate-fade-in">
@@ -469,8 +1270,11 @@
                   <button onClick={handleSend} disabled={!inputValue.trim()} className="px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                     <Icon name="send" className="w-4 h-4" />
                   </button>
+                  <button onClick={handleTransferToHuman} className="px-4 py-2.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center gap-2" title="转人工服务">
+                    <Icon name="user" className="w-4 h-4" />
+                    <span className="hidden sm:inline text-sm">转人工</span>
+                  </button>
                 </div>
-                <p className="text-xs text-slate-400 mt-2 text-center">输入「转人工」可立即转接 HR 专员</p>
               </div>
             </div>
           </div>
@@ -496,8 +1300,21 @@
       );
     }
 
-    function MessageBubble({ message }) {
+    function MessageBubble({ message, onTransferHuman }) {
       const isUser = message.role === 'user';
+      const isNeedsHuman = message.metadata?.needs_human && message.role === 'assistant';
+      
+      // 人工必要性等级对应的样式
+      const getHumanNecessityStyle = (level) => {
+        switch (level) {
+          case 'urgent': return { bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-600', badge: 'bg-red-500' };
+          case 'high': return { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-600', badge: 'bg-amber-500' };
+          case 'medium': return { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-600', badge: 'bg-blue-500' };
+          default: return { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-600', badge: 'bg-green-500' };
+        }
+      };
+      
+      const necessityStyle = message.metadata?.humanNecessityLevel ? getHumanNecessityStyle(message.metadata.humanNecessityLevel) : null;
 
       return (
         <div className={`flex gap-3 animate-slide-up ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -506,18 +1323,40 @@
               <Icon name="bot" className="w-4 h-4 text-blue-600" />
             </div>
           )}
-          <div className={`max-w-[75%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
-            <div className={`px-4 py-3 rounded-2xl ${isUser ? 'bg-blue-500 text-white rounded-tr-sm' : message.metadata?.needs_human ? 'bg-amber-50 border border-amber-200 rounded-tl-sm' : 'bg-white rounded-tl-sm shadow-sm border'}`}>
+          <div className={`max-w-[80%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
+            <div className={`px-4 py-3 rounded-2xl ${isUser ? 'bg-blue-500 text-white rounded-tr-sm' : message.metadata?.needs_human ? `${necessityStyle?.bg} ${necessityStyle?.border} border rounded-tl-sm` : 'bg-white rounded-tl-sm shadow-sm border'}`}>
               <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
             </div>
-            {message.metadata?.confidence && (
-              <div className="flex items-center gap-2 px-1">
-                <span className={`text-xs ${message.metadata.confidence >= 70 ? 'text-green-600' : 'text-amber-600'}`}>
-                  置信度 {message.metadata.confidence}%
-                </span>
-                {message.metadata.category && (
+            {!isUser && (
+              <div className="flex items-center gap-2 px-1 flex-wrap">
+                {message.metadata?.confidence && (
+                  <span className={`text-xs ${message.metadata.confidence >= 70 ? 'text-green-600' : 'text-amber-600'}`}>
+                    置信度 {message.metadata.confidence}%
+                  </span>
+                )}
+                {message.metadata?.category && (
                   <><span className="text-slate-300">•</span><span className="text-xs text-slate-500">{message.metadata.category}</span></>
                 )}
+                {message.metadata?.humanNecessityLevel && message.metadata.humanNecessityLevel !== 'low' && (
+                  <>
+                    <span className="text-slate-300">•</span>
+                    <span className={`text-xs ${necessityStyle?.text} font-medium`}>
+                      人工必要性: {message.metadata.humanNecessityLevel === 'urgent' ? '紧急' : message.metadata.humanNecessityLevel === 'high' ? '高' : '中'} ({message.metadata.humanNecessityScore}分)
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+            {/* 转人工按钮 - 当需要人工处理时显示 */}
+            {isNeedsHuman && onTransferHuman && message.metadata?.category !== '转人工' && (
+              <div className="mt-2">
+                <button 
+                  onClick={onTransferHuman} 
+                  className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all shadow-md hover:shadow-lg flex items-center gap-2"
+                >
+                  <Icon name="user" className="w-4 h-4" />
+                  转接人工服务
+                </button>
               </div>
             )}
           </div>
@@ -681,18 +1520,36 @@
           )}
 
           {/* 新增弹窗 */}
-          {showAddModal && <AddKnowledgeModal onClose={() => setShowAddModal(false)} onAdd={(item) => { updateAppData(prev => ({ ...prev, knowledgeBase: [...prev.knowledgeBase, item] })); addLog('新增知识库', `添加了 ${item.id}`); setShowAddModal(false); }} />}
+          {showAddModal && <AddKnowledgeModal onClose={() => setShowAddModal(false)} appData={appData} onAdd={(item) => { updateAppData(prev => ({ ...prev, knowledgeBase: [...prev.knowledgeBase, item] })); addLog('新增知识库', `添加了 ${item.id}`); setShowAddModal(false); }} />}
         </div>
       );
     }
 
-    function AddKnowledgeModal({ onClose, onAdd }) {
-      const [form, setForm] = useState({ category: '面试流程', question: '', answer: '', sensitivity_level: 'low', applicable_positions: ['all'] });
+    function AddKnowledgeModal({ onClose, onAdd, appData, initialQuestion = '' }) {
+      const positions = ['all', '技术岗', '销售岗', '运营岗', '管理岗'];
+      const [form, setForm] = useState({ category: '面试流程', question: initialQuestion, answer: '', sensitivity_level: 'low', applicable_positions: ['all'] });
 
       const handleSubmit = () => {
         if (!form.question || !form.answer) return;
-        const id = 'KB-' + Date.now().toString().slice(-6);
-        onAdd({ id, category: form.category, applicable_positions: form.applicable_positions, question_variants: form.question.split('\n'), standard_answer: form.answer, sensitivity_level: form.sensitivity_level });
+        // 计算下一个ID：取现有最大ID号 +1
+        const existingIds = appData.knowledgeBase.map(item => parseInt(item.id.replace('KB-', '')) || 0);
+        const maxId = existingIds.length > 0 ? Math.max(...existingIds) : 0;
+        const newId = 'KB-' + String(maxId + 1).padStart(3, '0');
+        onAdd({ id: newId, category: form.category, applicable_positions: form.applicable_positions, question_variants: form.question.split('\n'), standard_answer: form.answer, sensitivity_level: form.sensitivity_level });
+      };
+
+      const togglePosition = (pos) => {
+        if (pos === 'all') {
+          setForm({ ...form, applicable_positions: ['all'] });
+        } else {
+          const current = form.applicable_positions.filter(p => p !== 'all');
+          if (current.includes(pos)) {
+            const newPos = current.filter(p => p !== pos);
+            setForm({ ...form, applicable_positions: newPos.length === 0 ? ['all'] : newPos });
+          } else {
+            setForm({ ...form, applicable_positions: [...current, pos] });
+          }
+        }
       };
 
       return (
@@ -709,6 +1566,25 @@
                   <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border">
                     {['面试流程', '公司介绍', '福利政策', '入职流程', '办公环境', '技术要求', '技术面试', '职业发展', '薪资结构', '日常工作', 'KPI考核', '团队配置'].map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">适用岗位</label>
+                  <div className="flex flex-wrap gap-2">
+                    {positions.map(pos => (
+                      <button
+                        key={pos}
+                        type="button"
+                        onClick={() => togglePosition(pos)}
+                        className={`px-3 py-1.5 rounded-full text-sm transition-all ${
+                          form.applicable_positions.includes(pos)
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {pos === 'all' ? '所有岗位' : pos}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">问题（每行一个）</label>
@@ -737,9 +1613,42 @@
       );
     }
 
-    function ReviewQueuePanel({ appData, updateAppData, addLog }) {
+    function ReviewQueuePanel({ appData, updateAppData, addLog, setAdminSection }) {
       const [selectedIds, setSelectedIds] = useState([]);
       const [showAddModal, setShowAddModal] = useState(null);
+      const [filterLevel, setFilterLevel] = useState('all'); // all, urgent, high, medium, low
+
+      // 人工必要性等级对应的样式
+      const getLevelStyle = (level) => {
+        switch (level) {
+          case 'urgent': return { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-300', label: '紧急', icon: '🚨' };
+          case 'high': return { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-300', label: '高', icon: '⚠️' };
+          case 'medium': return { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300', label: '中', icon: '⚡' };
+          default: return { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300', label: '低', icon: '📋' };
+        }
+      };
+
+      // 意图类别样式
+      const getIntentStyle = (category) => {
+        switch (category) {
+          case 'sensitive': return { bg: 'bg-purple-50', text: 'text-purple-700', label: '敏感信息' };
+          case 'legal': return { bg: 'bg-rose-50', text: 'text-rose-700', label: '法律合规' };
+          case 'personal': return { bg: 'bg-cyan-50', text: 'text-cyan-700', label: '个人情况' };
+          case 'complaint': return { bg: 'bg-orange-50', text: 'text-orange-700', label: '投诉建议' };
+          default: return { bg: 'bg-slate-100', text: 'text-slate-700', label: '一般咨询' };
+        }
+      };
+
+      // 过滤审核队列
+      const filteredQueue = filterLevel === 'all' 
+        ? appData.reviewQueue 
+        : appData.reviewQueue.filter(item => item.humanNecessityLevel === filterLevel);
+
+      // 按紧急程度排序
+      const sortedQueue = [...filteredQueue].sort((a, b) => {
+        const priority = { urgent: 0, high: 1, medium: 2, low: 3 };
+        return (priority[a.humanNecessityLevel] || 3) - (priority[b.humanNecessityLevel] || 3);
+      });
 
       const handleApprove = (id) => {
         updateAppData(prev => ({ ...prev, reviewQueue: prev.reviewQueue.filter(r => r.id !== id) }));
@@ -761,57 +1670,126 @@
         setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
       };
 
+      const handleAddToKnowledge = (item) => {
+        updateAppData(prev => ({ 
+          ...prev, 
+          knowledgeBase: [...prev.knowledgeBase, item], 
+          reviewQueue: prev.reviewQueue.filter(r => r.id !== showAddModal.id) 
+        }));
+        addLog('添加到知识库', `从审核队列添加了 ${item.id}`);
+        setShowAddModal(null);
+        if (setAdminSection) setAdminSection('knowledge');
+      };
+
+      // 统计各等级数量
+      const levelCounts = {
+        urgent: appData.reviewQueue.filter(r => r.humanNecessityLevel === 'urgent').length,
+        high: appData.reviewQueue.filter(r => r.humanNecessityLevel === 'high').length,
+        medium: appData.reviewQueue.filter(r => r.humanNecessityLevel === 'medium').length,
+        low: appData.reviewQueue.filter(r => r.humanNecessityLevel === 'low').length
+      };
+
       return (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
               <h2 className="text-lg font-semibold text-slate-800">审核队列</h2>
-              <p className="text-sm text-slate-500">AI 置信度不足的待审核问题（{appData.reviewQueue.length} 条）</p>
+              <p className="text-sm text-slate-500">
+                待审核问题（{appData.reviewQueue.length} 条）
+                {levelCounts.urgent > 0 && <span className="ml-2 text-red-600 font-medium">🚨 紧急 {levelCounts.urgent}</span>}
+              </p>
             </div>
-            {selectedIds.length > 0 && (
-              <button onClick={handleBatchApprove} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
-                批量通过 ({selectedIds.length})
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {/* 等级筛选 */}
+              <div className="flex items-center gap-1 bg-white rounded-lg p-1 border">
+                {['all', 'urgent', 'high', 'medium', 'low'].map(level => (
+                  <button
+                    key={level}
+                    onClick={() => setFilterLevel(level)}
+                    className={`px-2 py-1 text-xs rounded-md transition-all ${
+                      filterLevel === level 
+                        ? level === 'urgent' ? 'bg-red-500 text-white' 
+                        : level === 'high' ? 'bg-amber-500 text-white'
+                        : level === 'medium' ? 'bg-blue-500 text-white'
+                        : level === 'low' ? 'bg-green-500 text-white'
+                        : 'bg-slate-500 text-white'
+                        : 'hover:bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {level === 'all' ? '全部' : level === 'urgent' ? '🚨紧急' : level === 'high' ? '⚠️高' : level === 'medium' ? '⚡中' : '📋低'}
+                    {level !== 'all' && levelCounts[level] > 0 && `(${levelCounts[level]})`}
+                  </button>
+                ))}
+              </div>
+              {selectedIds.length > 0 && (
+                <button onClick={handleBatchApprove} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
+                  批量通过 ({selectedIds.length})
+                </button>
+              )}
+            </div>
           </div>
 
-          {appData.reviewQueue.length === 0 ? (
+          {sortedQueue.length === 0 ? (
             <div className="bg-white rounded-xl shadow-sm border p-12 text-center text-slate-500">
               <Icon name="check" className="w-12 h-12 mx-auto mb-4 text-green-400" />
-              <p>暂无待审核问题</p>
+              <p>{filterLevel === 'all' ? '暂无待审核问题' : `暂无${filterLevel === 'urgent' ? '紧急' : filterLevel === 'high' ? '高' : filterLevel === 'medium' ? '中等' : '低'}优先级问题`}</p>
             </div>
           ) : (
             <div className="space-y-3">
-              {appData.reviewQueue.map(item => (
-                <div key={item.id} className="bg-white rounded-xl shadow-sm border p-4 border-l-4 border-amber-400">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelect(item.id)} className="w-4 h-4 rounded" />
-                        <span className="text-xs font-mono text-slate-500">{item.id}</span>
-                        <span className="px-2 py-0.5 bg-slate-100 rounded text-xs">{item.position}</span>
-                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">置信度 {item.confidence}%</span>
+              {sortedQueue.map(item => {
+                const levelStyle = getLevelStyle(item.humanNecessityLevel);
+                const intentStyle = getIntentStyle(item.intentCategory);
+                return (
+                  <div key={item.id} className={`bg-white rounded-xl shadow-sm border p-4 ${levelStyle.border} border-l-4`}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelect(item.id)} className="w-4 h-4 rounded" />
+                          <span className="text-xs font-mono text-slate-500">{item.id}</span>
+                          <span className="px-2 py-0.5 bg-slate-100 rounded text-xs">{item.position}</span>
+                          {/* 人工必要性评分 */}
+                          <span className={`px-2 py-0.5 ${levelStyle.bg} ${levelStyle.text} rounded text-xs font-medium`}>
+                            {levelStyle.icon} 人工必要性: {levelStyle.label} ({item.humanNecessityScore}分)
+                          </span>
+                          {/* 意图类别 */}
+                          <span className={`px-2 py-0.5 ${intentStyle.bg} ${intentStyle.text} rounded text-xs`}>
+                            {intentStyle.label}
+                          </span>
+                          {/* AI置信度 */}
+                          <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">AI置信度 {item.confidence}%</span>
+                          {/* 情绪标签 */}
+                          {item.emotions?.negative && <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded text-xs">😠 负面情绪</span>}
+                          {item.emotions?.urgent && <span className="px-2 py-0.5 bg-orange-50 text-orange-600 rounded text-xs">⏰ 紧急</span>}
+                        </div>
+                        <h4 className="font-medium text-slate-800 text-lg">"{item.question}"</h4>
+                        {item.context && item.context !== '用户提问' && (
+                          <p className="text-sm text-slate-500 mt-1">问题分析：{item.context}</p>
+                        )}
+                        {item.suggestion && (
+                          <p className="text-sm text-blue-600 mt-1 flex items-center gap-1">
+                            <Icon name="alert" className="w-3 h-3" />
+                            {item.suggestion}
+                          </p>
+                        )}
                       </div>
-                      <h4 className="font-medium text-slate-800">"{item.question}"</h4>
+                      <span className="text-xs text-slate-500 whitespace-nowrap ml-4">{item.created_at}</span>
                     </div>
-                    <span className="text-xs text-slate-500 whitespace-nowrap">{item.created_at}</span>
+                    <div className="flex items-center gap-2 flex-wrap pt-2 border-t">
+                      <button onClick={() => handleApprove(item.id)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center gap-1">
+                        <Icon name="check" className="w-4 h-4" /> 标记已处理
+                      </button>
+                      <button onClick={() => setShowAddModal(item)} className="px-3 py-1.5 border border-blue-500 text-blue-500 rounded-lg hover:bg-blue-50 text-sm flex items-center gap-1">
+                        <Icon name="plus" className="w-4 h-4" /> 添加到知识库
+                      </button>
+                      <button onClick={() => handleIgnore(item.id)} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 text-sm">忽略</button>
+                    </div>
                   </div>
-                  <p className="text-sm text-slate-500 mb-3">上下文：{item.context}</p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={() => handleApprove(item.id)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center gap-1">
-                      <Icon name="check" className="w-4 h-4" /> 标记已处理
-                    </button>
-                    <button onClick={() => setShowAddModal(item)} className="px-3 py-1.5 border border-blue-500 text-blue-500 rounded-lg hover:bg-blue-50 text-sm flex items-center gap-1">
-                      <Icon name="plus" className="w-4 h-4" /> 添加到知识库
-                    </button>
-                    <button onClick={() => handleIgnore(item.id)} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 text-sm">忽略</button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
-          {showAddModal && <AddKnowledgeModal onClose={() => setShowAddModal(null)} onAdd={(item) => { updateAppData(prev => ({ ...prev, knowledgeBase: [...prev.knowledgeBase, item], reviewQueue: prev.reviewQueue.filter(r => r.id !== showAddModal.id) })); addLog('添加到知识库', `从审核队列添加了 ${item.id}`); setShowAddModal(null); }} />}
+          {showAddModal && <AddKnowledgeModal onClose={() => setShowAddModal(null)} appData={appData} onAdd={handleAddToKnowledge} initialQuestion={showAddModal.question} />}
         </div>
       );
     }
@@ -870,6 +1848,282 @@
               </table>
             </div>
           </div>
+        </div>
+      );
+    }
+
+    // ==================== 通知设置面板 ====================
+    function NotificationPanel({ addLog }) {
+      const [config, setConfig] = useState(loadNotificationConfig);
+      const [showTestResult, setShowTestResult] = useState(null);
+      const [saving, setSaving] = useState(false);
+
+      // 保存配置
+      const handleSave = () => {
+        setSaving(true);
+        saveNotificationConfig(config);
+        addLog('通知设置', `更新了通知配置：${config.channels.length}个渠道`);
+        setTimeout(() => {
+          setSaving(false);
+        }, 500);
+      };
+
+      // 切换渠道启用状态
+      const toggleChannel = (channelId) => {
+        setConfig(prev => ({
+          ...prev,
+          channels: prev.channels.includes(channelId)
+            ? prev.channels.filter(c => c !== channelId)
+            : [...prev.channels, channelId]
+        }));
+      };
+
+      // 切换规则启用状态
+      const toggleRule = (ruleId) => {
+        setConfig(prev => ({
+          ...prev,
+          rules: prev.rules.includes(ruleId)
+            ? prev.rules.filter(r => r !== ruleId)
+            : [...prev.rules, ruleId]
+        }));
+      };
+
+      // 测试通知发送
+      const handleTestNotification = async () => {
+        if (config.channels.length === 0) {
+          setShowTestResult({ type: 'error', message: '请先选择至少一个通知渠道' });
+          return;
+        }
+        
+        const testItem = {
+          id: 'TEST-' + Date.now(),
+          question: '【测试消息】这是一条测试通知，确认是否收到',
+          position: '技术岗',
+          context: '系统功能测试',
+          humanNecessityScore: 85,
+          humanNecessityLevel: 'urgent',
+          intentCategory: 'personal',
+          emotions: { negative: false, urgent: true },
+          suggestion: '请确认是否收到此测试消息',
+          created_at: new Date().toLocaleString('zh-CN')
+        };
+        
+        const results = await sendNotification(config, testItem);
+        setShowTestResult({ type: 'success', results });
+        addLog('通知测试', `发送测试通知到 ${config.channels.length} 个渠道`);
+      };
+
+      // 获取渠道图标
+      const getChannelIcon = (iconName) => {
+        const icons = {
+          wechat: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.045c.134 0 .24-.11.24-.245 0-.06-.024-.12-.04-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.269-.03-.406-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>,
+          dingtalk: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>,
+          feishu: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>,
+          email: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>,
+          webhook: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+        };
+        return icons[iconName] || icons.webhook;
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">通知设置</h2>
+              <p className="text-sm text-slate-500">配置 HR 实时通知渠道</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleTestNotification}
+                className="px-4 py-2 border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50 text-sm flex items-center gap-2"
+              >
+                <Icon name="activity" className="w-4 h-4" />
+                发送测试
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm flex items-center gap-2"
+              >
+                {saving ? '保存中...' : '保存配置'}
+              </button>
+            </div>
+          </div>
+
+          {/* 通知总开关 */}
+          <div className="bg-white rounded-xl shadow-sm border p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${config.enabled ? 'bg-green-100' : 'bg-slate-100'}`}>
+                  <Icon name="activity" className={`w-6 h-6 ${config.enabled ? 'text-green-600' : 'text-slate-400'}`} />
+                </div>
+                <div>
+                  <h3 className="font-medium text-slate-800">实时通知</h3>
+                  <p className="text-sm text-slate-500">开启后，新问题将自动推送到已配置的渠道</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setConfig(prev => ({ ...prev, enabled: !prev.enabled }))}
+                className={`w-14 h-7 rounded-full transition-colors ${config.enabled ? 'bg-blue-500' : 'bg-slate-300'}`}
+              >
+                <div className={`w-6 h-6 bg-white rounded-full shadow transition-transform ${config.enabled ? 'translate-x-7' : 'translate-x-0.5'}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* 通知渠道 */}
+          <div className="bg-white rounded-xl shadow-sm border p-6">
+            <h3 className="font-medium text-slate-800 mb-4">通知渠道</h3>
+            <p className="text-sm text-slate-500 mb-4">选择需要推送通知的办公软件（可多选）</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {NOTIFICATION_CHANNELS.map(channel => (
+                <div
+                  key={channel.id}
+                  onClick={() => toggleChannel(channel.id)}
+                  className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                    config.channels.includes(channel.id)
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                        channel.id === 'wechat' ? 'bg-green-100 text-green-600' :
+                        channel.id === 'dingtalk' ? 'bg-blue-100 text-blue-600' :
+                        channel.id === 'feishu' ? 'bg-cyan-100 text-cyan-600' :
+                        channel.id === 'email' ? 'bg-slate-100 text-slate-600' :
+                        'bg-purple-100 text-purple-600'
+                      }`}>
+                        {getChannelIcon(channel.icon)}
+                      </div>
+                      <span className="font-medium text-slate-800">{channel.name}</span>
+                    </div>
+                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                      config.channels.includes(channel.id)
+                        ? 'bg-blue-500 border-blue-500'
+                        : 'border-slate-300'
+                    }`}>
+                      {config.channels.includes(channel.id) && (
+                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500">{channel.description}</p>
+                </div>
+              ))}
+            </div>
+            
+            {/* Webhook URL 配置 */}
+            {config.channels.includes('webhook') && (
+              <div className="mt-4 pt-4 border-t">
+                <label className="block text-sm font-medium text-slate-700 mb-2">Webhook URL</label>
+                <input
+                  type="url"
+                  value={config.webhookUrl || ''}
+                  onChange={(e) => setConfig(prev => ({ ...prev, webhookUrl: e.target.value }))}
+                  placeholder="https://your-webhook-url.com/notify"
+                  className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">配置自定义 Webhook 地址，消息将以 JSON 格式 POST 发送</p>
+              </div>
+            )}
+            
+            {/* 邮箱配置 */}
+            {config.channels.includes('email') && (
+              <div className="mt-4 pt-4 border-t">
+                <label className="block text-sm font-medium text-slate-700 mb-2">通知邮箱</label>
+                <input
+                  type="email"
+                  value={config.emailAddress || 'hr@company.com'}
+                  onChange={(e) => setConfig(prev => ({ ...prev, emailAddress: e.target.value }))}
+                  placeholder="hr@company.com"
+                  className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* 触发规则 */}
+          <div className="bg-white rounded-xl shadow-sm border p-6">
+            <h3 className="font-medium text-slate-800 mb-4">触发规则</h3>
+            <p className="text-sm text-slate-500 mb-4">选择需要触发通知的问题类型</p>
+            <div className="space-y-3">
+              {NOTIFICATION_RULES.map(rule => (
+                <label key={rule.id} className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.rules.includes(rule.id)}
+                    onChange={() => toggleRule(rule.id)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <span className={`font-medium ${
+                      rule.id === 'urgent' ? 'text-red-600' :
+                      rule.id === 'high' ? 'text-amber-600' :
+                      rule.id === 'sensitive' ? 'text-purple-600' :
+                      'text-slate-700'
+                    }`}>{rule.name}</span>
+                    <span className="text-sm text-slate-500 ml-2">{rule.description}</span>
+                  </div>
+                </label>
+              ))}
+              <label className="flex items-center gap-3 cursor-pointer pt-2 border-t">
+                <input
+                  type="checkbox"
+                  checked={config.notifyOnKnowledgeBaseMiss}
+                  onChange={() => setConfig(prev => ({ ...prev, notifyOnKnowledgeBaseMiss: !prev.notifyOnKnowledgeBaseMiss }))}
+                  className="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-500"
+                />
+                <div className="flex-1">
+                  <span className="font-medium text-slate-700">知识库无匹配</span>
+                  <span className="text-sm text-slate-500 ml-2">AI 无法解答时自动通知</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* 通知历史提示 */}
+          <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-100">
+            <h3 className="font-medium text-slate-800 mb-2 flex items-center gap-2">
+              <Icon name="sparkles" className="w-5 h-5 text-blue-600" />
+              通知效果预览
+            </h3>
+            <div className="bg-white/80 rounded-lg p-4 text-sm space-y-2">
+              <p className="text-slate-600"><strong>标题：</strong>【HR助手】新问题待处理 - 🚨紧急</p>
+              <p className="text-slate-600"><strong>问题：</strong>[用户问题内容]</p>
+              <p className="text-slate-600"><strong>岗位：</strong>技术岗</p>
+              <p className="text-slate-600"><strong>人工必要性：</strong>85分 (紧急)</p>
+              <p className="text-slate-600"><strong>分析：</strong>涉及薪资敏感信息</p>
+              <p className="text-slate-600"><strong>时间：</strong>2026-03-29 14:30:25</p>
+            </div>
+          </div>
+
+          {/* 测试结果 */}
+          {showTestResult && (
+            <div className={`rounded-xl p-4 border ${
+              showTestResult.type === 'success' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+            }`}>
+              <div className="flex items-center gap-2 mb-2">
+                <Icon name={showTestResult.type === 'success' ? 'check' : 'alert'} className={`w-5 h-5 ${showTestResult.type === 'success' ? 'text-green-600' : 'text-red-600'}`} />
+                <span className={`font-medium ${showTestResult.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+                  {showTestResult.type === 'success' ? '测试通知已发送' : '测试失败'}
+                </span>
+              </div>
+              {showTestResult.results && (
+                <div className="text-sm text-slate-600 ml-7">
+                  {showTestResult.results.map((r, i) => (
+                    <p key={i}>• {r.channel}: {r.status === 'success' ? '✓ 成功' : '✗ ' + r.message}</p>
+                  ))}
+                </div>
+              )}
+              {showTestResult.message && (
+                <p className="text-sm text-red-600 ml-7">{showTestResult.message}</p>
+              )}
+            </div>
+          )}
         </div>
       );
     }
