@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HR AI 智能助手</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: { 50: '#EFF6FF', 100: '#DBEAFE', 500: '#0052D9', 600: '#0043B8', 700: '#003599' },
+            success: { 50: '#ECFDF5', 500: '#10B981', 600: '#059669' },
+            warning: { 50: '#FFFBEB', 500: '#F59E0B', 600: '#D97706' },
+            danger: { 50: '#FEF2F2', 500: '#EF4444', 600: '#DC2626' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .chat-scroll::-webkit-scrollbar { width: 8px; }
+    .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+    .chat-scroll::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+    .chat-scroll::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+    @keyframes slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-slide-up { animation: slide-up 0.3s ease-out; }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .animate-fade-in { animation: fade-in 0.3s ease-out; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    // ==================== 数据层 ====================
+    const knowledgeBase = [
+      { id: 'KB-001', category: '面试流程', applicable_positions: ['all'], question_variants: ['面试有几轮', '面试流程是什么', '面试需要多久', '面试安排'], standard_answer: '我们公司招聘流程分为 **3 轮面试**：\n\n1. **HR 初筛**（30 分钟）- 了解您的背景和求职意向\n2. **专业面试**（1 小时）- 部门负责人考察专业能力\n3. **高管终面**（30 分钟）- 了解文化匹配度和成长潜力\n\n整体流程预计 1-2 周，具体时间可能因岗位有所不同。', sensitivity_level: 'low' },
+      { id: 'KB-002', category: '公司介绍', applicable_positions: ['all'], question_variants: ['公司规模', '公司多少人', '公司介绍', '你们是做什么的'], standard_answer: '我们是一家 **AI 驱动的企业服务公司**，成立于 2018 年：\n\n- **规模**：全国约 500+ 员工\n- **总部**：北京，在上海、深圳设有分部\n- **业务**：为企业提供智能化 HR 解决方案\n- **融资**：已完成 B 轮融资，累计融资 2 亿元\n- **客户**：服务 500+ 中大型企业客户\n\n我们倡导「工程师文化」，鼓励创新和快速迭代。', sensitivity_level: 'low' },
+      { id: 'KB-003', category: '福利政策', applicable_positions: ['all'], question_variants: ['五险一金', '社保公积金', '福利有哪些', '有什么福利'], standard_answer: '我们提供完善的福利保障：\n\n- **社保公积金**：入职当月缴纳五险一金，公积金按 12% 缴纳\n- **带薪年假**：首年 5 天，随工龄递增\n- **商业保险**：补充医疗险、重疾险\n- **节日福利**：生日礼金、节日礼品\n- **健康保障**：年度体检\n- **学习补贴**：每年 5000 元培训预算\n- **零食下午茶**：免费零食饮料', sensitivity_level: 'low' },
+      { id: 'KB-004', category: '入职流程', applicable_positions: ['all'], question_variants: ['入职需要什么材料', '报到带什么', '入职准备什么'], standard_answer: '入职前需要准备以下材料：\n\n1. **身份证** 原件及复印件 2 份\n2. **学历证书** 原件及复印件 1 份\n3. **离职证明**（如之前有工作）\n4. **一寸白底证件照** 3 张\n5. **银行卡**（工资卡）\n6. **体检报告**（三级医院出具，3个月内有效）\n\n报到时间通常为 **每月第一个工作日**，具体时间 HR 会提前通知。', sensitivity_level: 'low' },
+      { id: 'KB-005', category: '办公环境', applicable_positions: ['all'], question_variants: ['办公地点', '在哪里上班', '公司地址', '加班多吗'], standard_answer: '**办公信息**：\n\n- **地址**：北京市海淀区中关村软件园二期\n- **交通**：地铁 13 号线知春路站，步行 10 分钟\n- **环境**：开放式办公区，独立会议室，休息区\n\n**工作时间**：\n- 弹性工作制（9:00-18:00 或 10:00-19:00）\n- 午休 1.5 小时\n- 加班需申请，可调休\n\n整体工作节奏适中，不强制加班，提倡高效工作。', sensitivity_level: 'low' },
+      { id: 'KB-101', category: '技术要求', applicable_positions: ['技术岗'], question_variants: ['技术栈', '用什么技术', '技术要求', '需要掌握什么'], standard_answer: '**技术岗能力要求**：\n\n- **后端**：Python/Go/Java，熟悉微服务架构\n- **前端**：React/Vue，熟悉 TypeScript\n- **数据**：SQL、Python 数据处理\n- **工具**：Git、Docker、K8s\n- **加分项**：AI/ML 经验、大规模系统设计能力\n\n我们更看重 **工程能力** 和 **学习能力**，技术栈可以入职后学习。', sensitivity_level: 'low' },
+      { id: 'KB-102', category: '技术面试', applicable_positions: ['技术岗'], question_variants: ['技术面考什么', '算法题吗', '面试内容', '怎么面试'], standard_answer: '**技术面试安排**：\n\n1. **第一轮（45分钟）**：\n   - 算法编程（LeetCode 中等难度）\n   - 基础八股文（数据结构、网络、操作系统）\n\n2. **第二轮（60分钟）**：\n   - 系统设计题（设计一个 XXX 系统）\n   - 项目深挖（您的项目经历）\n\n**准备建议**：\n- 重点复习：数组、链表、二叉树、动态规划\n- 准备 2-3 个有深度的项目经历\n- 系统设计：可参考《系统设计面试》', sensitivity_level: 'low' },
+      { id: 'KB-103', category: '职业发展', applicable_positions: ['技术岗'], question_variants: ['晋升机制', '怎么晋升', '晋升路径', '成长空间'], standard_answer: '**技术岗发展路径**：\n\n```\nT2 (Senior) → T3 (Staff) → T4 (Principal) → T5 (Fellow)\n     ↓\n   M1 (Tech Lead) → M2 (Manager) → M3 (Director)\n```\n\n- **晋升周期**：每年 4 月评估一次\n- **晋升标准**：技术能力 + 业务影响 + 团队贡献\n- **培训资源**：内部技术分享、外部培训、Conference 参与\n- **导师制度**：入职指定 1:1 导师', sensitivity_level: 'low' },
+      { id: 'KB-201', category: '薪资结构', applicable_positions: ['销售岗'], question_variants: ['提成怎么算', '销售薪资', '收入构成', '工资结构'], standard_answer: '**销售岗薪资结构**：\n\n- **base 底薪**：8K-15K（根据经验定级）\n- **绩效工资**：2K-5K/月\n- **提成**：签约合同额的 3%-8%\n- **奖金**：季度/年度奖金包\n\n**薪资范围**：\n- 初级销售：10-15K/月\n- 高级销售：20-40K/月\n- top sales：年薪可达 50-80 万\n\n具体 offer 会根据您的经验和对齐市场水平来定。', sensitivity_level: 'medium' },
+      { id: 'KB-301', category: '日常工作', applicable_positions: ['运营岗'], question_variants: ['运营做什么', '日常工作', '岗位内容', '具体工作'], standard_answer: '**运营岗工作内容**：\n\n- **用户运营**：用户生命周期管理、活跃度分析、用户分层策略\n- **活动运营**：策划执行用户活动、活动效果复盘优化\n- **内容运营**：内容选题策划、社群内容管理\n- **数据运营**：核心指标监控、数据分析报告', sensitivity_level: 'low' },
+      { id: 'KB-401', category: '团队配置', applicable_positions: ['管理岗'], question_variants: ['团队多少人', '汇报关系', '下属有几个', '团队规模'], standard_answer: '**管理岗团队配置**：\n\n- **团队规模**：\n  - Team Lead：3-5 人\n  - Manager：8-15 人\n  - Director：20-50 人\n\n- **汇报关系**：直接汇报给部门 VP\n- **支持资源**：1:1 HR BP 对接、内部猎头支持招聘、外部管理培训预算', sensitivity_level: 'low' }
+    ];
+
+    const sensitiveKeywords = ['薪资', '工资', '底薪', '提成能谈吗', '期权', '股权', '竞业协议', '背景调查', '离职证明', 'offer催一下', '能不能快点', '比较急', '你们面试官怎么样'];
+
+    const emotionKeywords = {
+      negative: ['不满', '太差', '失望', '投诉', '垃圾', '废物', '没用', '浪费时间'],
+      urgent: ['急', '非常急', '马上', '立刻', '赶紧']
+    };
+
+    const quickQuestions = {
+      all: [
+        { id: 'q1', text: '面试有几轮？', icon: 'calendar' },
+        { id: 'q2', text: '五险一金怎么缴？', icon: 'shield' },
+        { id: 'q3', text: '入职需要什么材料？', icon: 'file-text' },
+        { id: 'q4', text: '公司地址在哪里？', icon: 'map-pin' },
+      ],
+      '技术岗': [
+        { id: 't1', text: '技术栈要求？', icon: 'code' },
+        { id: 't2', text: '技术面试考什么？', icon: 'terminal' },
+        { id: 't3', text: '晋升路径？', icon: 'trending-up' },
+      ],
+      '销售岗': [
+        { id: 's1', text: '提成怎么算？', icon: 'dollar-sign' },
+        { id: 's2', text: '客户资源怎么分配？', icon: 'users' },
+      ],
+      '运营岗': [
+        { id: 'o1', text: '日常工作内容？', icon: 'layout' },
+        { id: 'o2', text: 'KPI怎么考核？', icon: 'target' },
+      ],
+      '管理岗': [
+        { id: 'm1', text: '团队规模多大？', icon: 'users' },
+        { id: 'm2', text: '权限有哪些？', icon: 'lock' },
+      ]
+    };
+
+    // 生成近30天模拟数据
+    const generateDailyMetrics = () => {
+      const data = [];
+      const today = new Date();
+      for (let i = 29; i >= 0; i--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        const baseLine = 75 + (30 - i) * 0.3;
+        const variance = Math.random() * 10 - 5;
+        const aiResolved = Math.min(95, Math.max(60, baseLine + variance));
+        const totalConversations = Math.floor(30 + Math.random() * 20);
+        data.push({
+          date: dateStr,
+          total_conversations: totalConversations,
+          ai_resolved: Math.floor(totalConversations * (aiResolved / 100)),
+          human_handled: totalConversations - Math.floor(totalConversations * (aiResolved / 100)),
+          ai_resolution_rate: parseFloat(aiResolved.toFixed(1)),
+          avg_response_time: Math.floor(20 + Math.random() * 20),
+          satisfaction_score: parseFloat((4.0 + Math.random() * 1).toFixed(2)),
+          sensitive_blocked: Math.floor(Math.random() * 5)
+        });
+      }
+      return data;
+    };
+
+    // ==================== 存储层 ====================
+    const STORAGE_KEY = 'hr-ai-assistant-data';
+
+    const defaultData = {
+      conversations: [],
+      reviewQueue: [],
+      knowledgeBase: [...knowledgeBase],
+      operationLogs: [],
+      stats: {
+        totalConversations: 0,
+        aiResolved: 0,
+        humanHandled: 0,
+        sensitiveBlocked: 0,
+        totalSatisfaction: 0,
+        satisfactionCount: 0
+      }
+    };
+
+    const loadData = () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          return { ...defaultData, ...parsed };
+        }
+      } catch (e) {}
+      return { ...defaultData };
+    };
+
+    const saveData = (data) => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      } catch (e) {}
+    };
+
+    // ==================== 图标组件 ====================
+    const Icon = ({ name, className = "w-4 h-4" }) => {
+      const icons = {
+        sparkles: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>,
+        message: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>,
+        settings: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>,
+        chart: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>,
+        send: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>,
+        bot: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>,
+        user: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>,
+        check: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>,
+        clock: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+        star: <svg className={className} fill="currentColor" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>,
+        search: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>,
+        plus: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>,
+        edit: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+        trash: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+        eye: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>,
+        download: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+        activity: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
+        alert: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+        x: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>,
+        menu: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>,
+        database: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" /></svg>,
+        thumbsUp: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" /></svg>,
+        thumbsDown: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5" /></svg>,
+        arrowRight: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>,
+        chevronDown: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>,
+        refresh: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>,
+        export: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
+      };
+      return icons[name] || icons.message;
+    };
+
+    // ==================== 主应用 ====================
+    function App() {
+      const [activeTab, setActiveTab] = useState('candidate');
+      const [appData, setAppData] = useState(loadData);
+
+      useEffect(() => {
+        saveData(appData);
+      }, [appData]);
+
+      const updateAppData = (updater) => {
+        setAppData(prev => {
+          const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater };
+          return next;
+        });
+      };
+
+      const addLog = (type, detail) => {
+        updateAppData(prev => ({
+          ...prev,
+          operationLogs: [...prev.operationLogs, {
+            id: Date.now().toString(),
+            time: new Date().toLocaleString('zh-CN'),
+            type,
+            detail,
+            operator: 'admin'
+          }].slice(-100)
+        }));
+      };
+
+      return (
+        <div className="min-h-screen">
+          <header className="bg-white border-b sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 md:px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center">
+                    <Icon name="sparkles" className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h1 className="text-lg font-bold text-slate-800">HR AI 智能助手</h1>
+                    <p className="text-xs text-slate-500">智能答疑 · 高效招聘</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="hidden sm:flex items-center gap-2 text-sm text-slate-600">
+                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                    <span>系统运行正常</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="bg-white border-b">
+            <div className="max-w-7xl mx-auto px-4 md:px-6">
+              <nav className="flex gap-1 overflow-x-auto">
+                {[
+                  { id: 'candidate', label: '候选人端', icon: 'message' },
+                  { id: 'hr-admin', label: 'HR管理后台', icon: 'settings' },
+                  { id: 'dashboard', label: '效果看板', icon: 'chart' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${
+                      activeTab === tab.id
+                        ? 'border-primary-500 text-primary-600'
+                        : 'border-transparent text-slate-600 hover:text-slate-800'
+                    }`}
+                  >
+                    <Icon name={tab.icon} className="w-4 h-4" />
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+          </div>
+
+          <main className="max-w-7xl mx-auto px-4 md:px-6 py-6">
+            {activeTab === 'candidate' && <CandidatePortal appData={appData} updateAppData={updateAppData} />}
+            {activeTab === 'hr-admin' && <HRAdmin appData={appData} updateAppData={updateAppData} addLog={addLog} />}
+            {activeTab === 'dashboard' && <Dashboard appData={appData} />}
+          </main>
+        </div>
+      );
+    }
+
+    // ==================== 候选人端 ====================
+    function CandidatePortal({ appData, updateAppData }) {
+      const [selectedPosition, setSelectedPosition] = useState('技术岗');
+      const [messages, setMessages] = useState([
+        { id: '1', role: 'assistant', content: '您好！我是 HR 智能助手 👋\n\n我可以帮您解答：\n• 面试流程相关问题\n• 薪资福利政策\n• 入职准备事项\n• 岗位信息咨询\n\n请先选择您的应聘岗位，然后告诉我您想了解什么？', timestamp: new Date() }
+      ]);
+      const [inputValue, setInputValue] = useState('');
+      const [isTyping, setIsTyping] = useState(false);
+      const [showPositionSelect, setShowPositionSelect] = useState(true);
+      const [showRating, setShowRating] = useState(false);
+      const messagesEndRef = useRef(null);
+
+      const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      };
+
+      useEffect(() => {
+        scrollToBottom();
+      }, [messages]);
+
+      const searchKnowledgeBase = (query) => {
+        const queryLower = query.toLowerCase();
+
+        for (const keyword of sensitiveKeywords) {
+          if (queryLower.includes(keyword)) {
+            return { type: 'sensitive', answer: '这个问题涉及较敏感的信息，我已为您转接 HR 专员，预计 5 分钟内回复您。💬\n\n建议您也可以直接联系 HR：hr@company.com' };
+          }
+        }
+
+        let bestMatch = null;
+        let bestScore = 0;
+
+        for (const item of knowledgeBase) {
+          if (item.applicable_positions[0] !== 'all' && !item.applicable_positions.includes(selectedPosition)) continue;
+
+          for (const variant of item.question_variants) {
+            let score = 0;
+            const variantLower = variant.toLowerCase();
+            const queryWords = queryLower.split(/\s+/);
+
+            for (const word of queryWords) {
+              if (variantLower.includes(word) || queryLower.includes(word)) score += 10;
+            }
+            if (variantLower.includes(queryLower) || queryLower.includes(variantLower)) score += 20;
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = item;
+            }
+          }
+        }
+
+        if (bestMatch && bestScore >= 10) {
+          const confidence = Math.min(95, bestScore + 60);
+          return { type: confidence < 70 ? 'low_confidence' : 'success', answer: bestMatch.standard_answer, confidence, category: bestMatch.category };
+        }
+
+        return { type: 'no_match', answer: '抱歉，关于这个问题我暂时没有准确的信息。\n\n已为您转接 HR 专员，预计 5 分钟内给您专业解答。', confidence: 30 };
+      };
+
+      const handleSend = () => {
+        if (!inputValue.trim()) return;
+
+        const userMessage = { id: Date.now().toString(), role: 'user', content: inputValue, timestamp: new Date() };
+        setMessages(prev => [...prev, userMessage]);
+        setInputValue('');
+        setIsTyping(true);
+
+        setTimeout(() => {
+          const result = searchKnowledgeBase(inputValue);
+          let aiContent = result.answer;
+          let needsHuman = result.type === 'no_match' || result.type === 'sensitive' || result.type === 'low_confidence';
+
+          if (result.type === 'low_confidence') {
+            aiContent += '\n\n⚠️ 系统已标记此答案为低置信度，将由 HR 审核后确认。';
+          }
+
+          const aiMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: aiContent,
+            timestamp: new Date(),
+            metadata: { confidence: result.confidence, category: result.category || '未分类', needs_human: needsHuman }
+          };
+
+          setMessages(prev => [...prev, aiMessage]);
+          setIsTyping(false);
+
+          // 更新统计数据
+          updateAppData(prev => ({
+            ...prev,
+            stats: {
+              ...prev.stats,
+              totalConversations: prev.stats.totalConversations + 1,
+              aiResolved: needsHuman ? prev.stats.aiResolved : prev.stats.aiResolved + 1,
+              humanHandled: needsHuman ? prev.stats.humanHandled + 1 : prev.stats.humanHandled,
+              sensitiveBlocked: result.type === 'sensitive' ? prev.stats.sensitiveBlocked + 1 : prev.stats.sensitiveBlocked
+            }
+          }));
+
+          // 如果是低置信度或无匹配，添加到审核队列
+          if (needsHuman) {
+            updateAppData(prev => ({
+              ...prev,
+              reviewQueue: [...prev.reviewQueue, {
+                id: 'RQ-' + Date.now(),
+                question: inputValue,
+                context: '用户提问',
+                position: selectedPosition,
+                confidence: result.confidence,
+                status: 'pending',
+                created_at: new Date().toLocaleString('zh-CN')
+              }]
+            }));
+          }
+
+          // 对话2轮后显示评价
+          if (messages.length >= 4) {
+            setShowRating(true);
+          }
+        }, 800 + Math.random() * 500);
+      };
+
+      const handleRating = (rating) => {
+        updateAppData(prev => ({
+          ...prev,
+          stats: {
+            ...prev.stats,
+            totalSatisfaction: prev.stats.totalSatisfaction + rating,
+            satisfactionCount: prev.stats.satisfactionCount + 1
+          }
+        }));
+        setShowRating(false);
+      };
+
+      const questions = [...quickQuestions.all, ...(quickQuestions[selectedPosition] || [])];
+
+      return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-xl shadow-sm border h-[500px] md:h-[600px] flex flex-col">
+              {showPositionSelect && (
+                <div className="p-4 border-b bg-blue-50">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                        <Icon name="bot" className="w-5 h-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-slate-600">您正在咨询：</p>
+                        <select value={selectedPosition} onChange={(e) => setSelectedPosition(e.target.value)} className="text-blue-600 font-medium bg-transparent border-none focus:outline-none">
+                          <option value="技术岗">技术岗</option>
+                          <option value="销售岗">销售岗</option>
+                          <option value="运营岗">运营岗</option>
+                          <option value="管理岗">管理岗</option>
+                        </select>
+                      </div>
+                    </div>
+                    <button onClick={() => setShowPositionSelect(false)} className="text-sm text-slate-500 hover:text-slate-700">收起</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 chat-scroll">
+                {messages.map(message => (
+                  <MessageBubble key={message.id} message={message} />
+                ))}
+                {isTyping && (
+                  <div className="flex gap-3 animate-fade-in">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <Icon name="bot" className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border">
+                      <div className="flex gap-1">
+                        <div className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                        <div className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                        <div className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {showRating && (
+                <div className="p-4 border-t bg-amber-50 flex items-center justify-center gap-4">
+                  <span className="text-sm text-slate-600">评价一下回答：</span>
+                  <button onClick={() => handleRating(5)} className="p-2 hover:bg-green-100 rounded-full transition-colors"><Icon name="thumbsUp" className="w-6 h-6 text-green-600" /></button>
+                  <button onClick={() => handleRating(3)} className="p-2 hover:bg-yellow-100 rounded-full transition-colors"><Icon name="star" className="w-6 h-6 text-yellow-500" /></button>
+                  <button onClick={() => handleRating(1)} className="p-2 hover:bg-red-100 rounded-full transition-colors"><Icon name="thumbsDown" className="w-6 h-6 text-red-600" /></button>
+                </div>
+              )}
+
+              <div className="p-4 border-t bg-slate-50">
+                <div className="flex gap-2">
+                  <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSend()} placeholder="输入您的问题..." className="flex-1 px-4 py-2.5 rounded-lg border bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <button onClick={handleSend} disabled={!inputValue.trim()} className="px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                    <Icon name="send" className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 mt-2 text-center">输入「转人工」可立即转接 HR 专员</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-xl shadow-sm border h-[500px] md:h-[600px] flex flex-col">
+              <div className="p-4 border-b">
+                <h3 className="font-semibold text-slate-800">快捷问题</h3>
+                <p className="text-sm text-slate-500">点击直接获取答案</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {questions.map((q, idx) => (
+                  <button key={q.id || idx} onClick={() => { setInputValue(q.text); setTimeout(handleSend, 100); }} className="w-full text-left px-4 py-3 rounded-lg bg-slate-50 hover:bg-blue-50 hover:text-blue-700 transition-all flex items-center gap-3 group">
+                    <Icon name={q.icon || 'message'} className="w-4 h-4 text-blue-500" />
+                    <span className="text-sm">{q.text}</span>
+                    <Icon name="arrowRight" className="w-4 h-4 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function MessageBubble({ message }) {
+      const isUser = message.role === 'user';
+
+      return (
+        <div className={`flex gap-3 animate-slide-up ${isUser ? 'flex-row-reverse' : ''}`}>
+          {!isUser && (
+            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+              <Icon name="bot" className="w-4 h-4 text-blue-600" />
+            </div>
+          )}
+          <div className={`max-w-[75%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
+            <div className={`px-4 py-3 rounded-2xl ${isUser ? 'bg-blue-500 text-white rounded-tr-sm' : message.metadata?.needs_human ? 'bg-amber-50 border border-amber-200 rounded-tl-sm' : 'bg-white rounded-tl-sm shadow-sm border'}`}>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+            </div>
+            {message.metadata?.confidence && (
+              <div className="flex items-center gap-2 px-1">
+                <span className={`text-xs ${message.metadata.confidence >= 70 ? 'text-green-600' : 'text-amber-600'}`}>
+                  置信度 {message.metadata.confidence}%
+                </span>
+                {message.metadata.category && (
+                  <><span className="text-slate-300">•</span><span className="text-xs text-slate-500">{message.metadata.category}</span></>
+                )}
+              </div>
+            )}
+          </div>
+          {isUser && (
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-500 flex items-center justify-center flex-shrink-0 text-white text-sm font-medium">你</div>
+          )}
+        </div>
+      );
+    }
+
+    // ==================== HR 管理后台 ====================
+    function HRAdmin({ appData, updateAppData, addLog }) {
+      const [activeSection, setActiveSection] = useState('knowledge-base');
+      const [sidebarOpen, setSidebarOpen] = useState(true);
+
+      return (
+        <div className="flex flex-col lg:flex-row gap-6">
+          {/* 移动端菜单按钮 */}
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden p-2 bg-white rounded-lg border">
+            <Icon name={sidebarOpen ? 'x' : 'menu'} className="w-5 h-5" />
+          </button>
+
+          {/* 侧边栏 */}
+          <div className={`${sidebarOpen ? 'block' : 'hidden'} lg:block w-full lg:w-64 flex-shrink-0`}>
+            <div className="bg-white rounded-xl shadow-sm border">
+              <div className="p-4 border-b">
+                <h3 className="font-semibold text-slate-800">管理功能</h3>
+              </div>
+              <nav className="p-2">
+                {[
+                  { id: 'knowledge-base', label: '知识库管理', icon: 'database', badge: appData.knowledgeBase.length },
+                  { id: 'review-queue', label: '审核队列', icon: 'clock', badge: appData.reviewQueue.length },
+                  { id: 'operation-logs', label: '操作日志', icon: 'activity' },
+                  { id: 'settings', label: '系统设置', icon: 'settings' }
+                ].map(section => (
+                  <button key={section.id} onClick={() => setActiveSection(section.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${activeSection === section.id ? 'bg-blue-50 text-blue-600 font-medium' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <Icon name={section.icon} className="w-4 h-4" />
+                    <span>{section.label}</span>
+                    {section.badge > 0 && <span className="ml-auto bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{section.badge}</span>}
+                  </button>
+                ))}
+              </nav>
+            </div>
+          </div>
+
+          <div className="flex-1">
+            {activeSection === 'knowledge-base' && <KnowledgeBasePanel appData={appData} updateAppData={updateAppData} addLog={addLog} />}
+            {activeSection === 'review-queue' && <ReviewQueuePanel appData={appData} updateAppData={updateAppData} addLog={addLog} />}
+            {activeSection === 'operation-logs' && <OperationLogsPanel appData={appData} />}
+            {activeSection === 'settings' && <SettingsPanel appData={appData} updateAppData={updateAppData} addLog={addLog} />}
+          </div>
+        </div>
+      );
+    }
+
+    function KnowledgeBasePanel({ appData, updateAppData, addLog }) {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [filterCategory, setFilterCategory] = useState('');
+      const [filterSensitivity, setFilterSensitivity] = useState('');
+      const [editingItem, setEditingItem] = useState(null);
+      const [showAddModal, setShowAddModal] = useState(false);
+
+      const categories = [...new Set(appData.knowledgeBase.map(k => k.category))];
+
+      const filteredItems = appData.knowledgeBase.filter(item => {
+        const matchSearch = !searchTerm || item.question_variants.some(q => q.includes(searchTerm)) || item.category.includes(searchTerm);
+        const matchCategory = !filterCategory || item.category === filterCategory;
+        const matchSensitivity = !filterSensitivity || item.sensitivity_level === filterSensitivity;
+        return matchSearch && matchCategory && matchSensitivity;
+      });
+
+      const handleDelete = (id) => {
+        if (confirm('确定删除这条知识库条目？')) {
+          updateAppData(prev => ({ ...prev, knowledgeBase: prev.knowledgeBase.filter(k => k.id !== id) }));
+          addLog('删除知识库', `删除了 ${id}`);
+        }
+      };
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">知识库管理</h2>
+              <p className="text-sm text-slate-500">管理 FAQ 问答知识库（{filteredItems.length} 条）</p>
+            </div>
+            <button onClick={() => setShowAddModal(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm">
+              <Icon name="plus" className="w-4 h-4" /> 新增条目
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border p-4">
+            <div className="flex flex-wrap gap-3">
+              <div className="relative flex-1 min-w-[200px]">
+                <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索问题..." className="w-full pl-10 pr-4 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="px-3 py-2 rounded-lg border text-sm">
+                <option value="">全部分类</option>
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={filterSensitivity} onChange={(e) => setFilterSensitivity(e.target.value)} className="px-3 py-2 rounded-lg border text-sm">
+                <option value="">全部敏感级</option>
+                <option value="low">低敏感</option>
+                <option value="medium">中敏感</option>
+                <option value="high">高敏感</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[800px]">
+                <thead className="bg-slate-50 border-b">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">ID</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">分类</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">问题</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">敏感级</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {filteredItems.map(item => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3"><span className="text-xs font-mono text-slate-500">{item.id}</span></td>
+                      <td className="px-4 py-3"><span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-xs">{item.category}</span></td>
+                      <td className="px-4 py-3 text-sm text-slate-600 max-w-xs truncate">{item.question_variants[0]}</td>
+                      <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs ${item.sensitivity_level === 'low' ? 'bg-green-50 text-green-600' : item.sensitivity_level === 'medium' ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>{item.sensitivity_level === 'low' ? '低' : item.sensitivity_level === 'medium' ? '中' : '高'}</span></td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => setEditingItem(item)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><Icon name="eye" className="w-4 h-4" /></button>
+                          <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600"><Icon name="trash" className="w-4 h-4" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 详情弹窗 */}
+          {editingItem && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl max-w-lg w-full max-h-[80vh] overflow-y-auto">
+                <div className="p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold">知识库详情</h3>
+                    <button onClick={() => setEditingItem(null)} className="p-1 hover:bg-slate-100 rounded"><Icon name="x" className="w-5 h-5" /></button>
+                  </div>
+                  <div className="space-y-4">
+                    <div><label className="text-sm text-slate-500">ID</label><p className="font-mono text-sm">{editingItem.id}</p></div>
+                    <div><label className="text-sm text-slate-500">分类</label><p>{editingItem.category}</p></div>
+                    <div><label className="text-sm text-slate-500">适用岗位</label><p>{editingItem.applicable_positions.join(', ')}</p></div>
+                    <div><label className="text-sm text-slate-500">问题变体</label><p>{editingItem.question_variants.join(' / ')}</p></div>
+                    <div><label className="text-sm text-slate-500">标准答案</label><p className="whitespace-pre-wrap bg-slate-50 p-3 rounded-lg text-sm">{editingItem.standard_answer}</p></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 新增弹窗 */}
+          {showAddModal && <AddKnowledgeModal onClose={() => setShowAddModal(false)} onAdd={(item) => { updateAppData(prev => ({ ...prev, knowledgeBase: [...prev.knowledgeBase, item] })); addLog('新增知识库', `添加了 ${item.id}`); setShowAddModal(false); }} />}
+        </div>
+      );
+    }
+
+    function AddKnowledgeModal({ onClose, onAdd }) {
+      const [form, setForm] = useState({ category: '面试流程', question: '', answer: '', sensitivity_level: 'low', applicable_positions: ['all'] });
+
+      const handleSubmit = () => {
+        if (!form.question || !form.answer) return;
+        const id = 'KB-' + Date.now().toString().slice(-6);
+        onAdd({ id, category: form.category, applicable_positions: form.applicable_positions, question_variants: form.question.split('\n'), standard_answer: form.answer, sensitivity_level: form.sensitivity_level });
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-lg w-full">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">新增知识库条目</h3>
+                <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded"><Icon name="x" className="w-5 h-5" /></button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">分类</label>
+                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border">
+                    {['面试流程', '公司介绍', '福利政策', '入职流程', '办公环境', '技术要求', '技术面试', '职业发展', '薪资结构', '日常工作', 'KPI考核', '团队配置'].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">问题（每行一个）</label>
+                  <textarea value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} rows={3} className="w-full px-3 py-2 rounded-lg border" placeholder="面试有几轮&#10;面试流程是什么" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">标准答案</label>
+                  <textarea value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} rows={5} className="w-full px-3 py-2 rounded-lg border" placeholder="请输入标准答案..." />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">敏感级别</label>
+                  <select value={form.sensitivity_level} onChange={(e) => setForm({ ...form, sensitivity_level: e.target.value })} className="w-full px-3 py-2 rounded-lg border">
+                    <option value="low">低敏感</option>
+                    <option value="medium">中敏感</option>
+                    <option value="high">高敏感</option>
+                  </select>
+                </div>
+                <div className="flex justify-end gap-3 pt-4">
+                  <button onClick={onClose} className="px-4 py-2 border rounded-lg hover:bg-slate-50">取消</button>
+                  <button onClick={handleSubmit} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ReviewQueuePanel({ appData, updateAppData, addLog }) {
+      const [selectedIds, setSelectedIds] = useState([]);
+      const [showAddModal, setShowAddModal] = useState(null);
+
+      const handleApprove = (id) => {
+        updateAppData(prev => ({ ...prev, reviewQueue: prev.reviewQueue.filter(r => r.id !== id) }));
+        addLog('审核通过', `审核了 ${id}`);
+      };
+
+      const handleIgnore = (id) => {
+        updateAppData(prev => ({ ...prev, reviewQueue: prev.reviewQueue.filter(r => r.id !== id) }));
+        addLog('忽略问题', `忽略了 ${id}`);
+      };
+
+      const handleBatchApprove = () => {
+        updateAppData(prev => ({ ...prev, reviewQueue: prev.reviewQueue.filter(r => !selectedIds.includes(r.id)) }));
+        addLog('批量审核', `批量审核了 ${selectedIds.length} 条`);
+        setSelectedIds([]);
+      };
+
+      const toggleSelect = (id) => {
+        setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+      };
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">审核队列</h2>
+              <p className="text-sm text-slate-500">AI 置信度不足的待审核问题（{appData.reviewQueue.length} 条）</p>
+            </div>
+            {selectedIds.length > 0 && (
+              <button onClick={handleBatchApprove} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
+                批量通过 ({selectedIds.length})
+              </button>
+            )}
+          </div>
+
+          {appData.reviewQueue.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border p-12 text-center text-slate-500">
+              <Icon name="check" className="w-12 h-12 mx-auto mb-4 text-green-400" />
+              <p>暂无待审核问题</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {appData.reviewQueue.map(item => (
+                <div key={item.id} className="bg-white rounded-xl shadow-sm border p-4 border-l-4 border-amber-400">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelect(item.id)} className="w-4 h-4 rounded" />
+                        <span className="text-xs font-mono text-slate-500">{item.id}</span>
+                        <span className="px-2 py-0.5 bg-slate-100 rounded text-xs">{item.position}</span>
+                        <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">置信度 {item.confidence}%</span>
+                      </div>
+                      <h4 className="font-medium text-slate-800">"{item.question}"</h4>
+                    </div>
+                    <span className="text-xs text-slate-500 whitespace-nowrap">{item.created_at}</span>
+                  </div>
+                  <p className="text-sm text-slate-500 mb-3">上下文：{item.context}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => handleApprove(item.id)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center gap-1">
+                      <Icon name="check" className="w-4 h-4" /> 标记已处理
+                    </button>
+                    <button onClick={() => setShowAddModal(item)} className="px-3 py-1.5 border border-blue-500 text-blue-500 rounded-lg hover:bg-blue-50 text-sm flex items-center gap-1">
+                      <Icon name="plus" className="w-4 h-4" /> 添加到知识库
+                    </button>
+                    <button onClick={() => handleIgnore(item.id)} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 text-sm">忽略</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showAddModal && <AddKnowledgeModal onClose={() => setShowAddModal(null)} onAdd={(item) => { updateAppData(prev => ({ ...prev, knowledgeBase: [...prev.knowledgeBase, item], reviewQueue: prev.reviewQueue.filter(r => r.id !== showAddModal.id) })); addLog('添加到知识库', `从审核队列添加了 ${item.id}`); setShowAddModal(null); }} />}
+        </div>
+      );
+    }
+
+    function OperationLogsPanel({ appData }) {
+      const exportLogs = () => {
+        const headers = ['时间', '操作类型', '详情', '操作人'];
+        const rows = appData.operationLogs.map(log => [log.time, log.type, log.detail, log.operator]);
+        const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
+        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `操作日志_${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">操作日志</h2>
+              <p className="text-sm text-slate-500">管理员操作记录（{appData.operationLogs.length} 条）</p>
+            </div>
+            {appData.operationLogs.length > 0 && (
+              <button onClick={exportLogs} className="px-4 py-2 border rounded-lg hover:bg-slate-50 text-sm flex items-center gap-2">
+                <Icon name="export" className="w-4 h-4" /> 导出 CSV
+              </button>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-50 border-b">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">时间</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">操作类型</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">详情</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">操作人</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {appData.operationLogs.length === 0 ? (
+                    <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">暂无操作记录</td></tr>
+                  ) : appData.operationLogs.slice().reverse().map(log => (
+                    <tr key={log.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 text-sm text-slate-500">{log.time}</td>
+                      <td className="px-4 py-3"><span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded text-xs">{log.type}</span></td>
+                      <td className="px-4 py-3 text-sm text-slate-600">{log.detail}</td>
+                      <td className="px-4 py-3 text-sm text-slate-500">{log.operator}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function SettingsPanel({ appData, updateAppData, addLog }) {
+      const [settings, setSettings] = useState({ confidenceThreshold: 70, autoHandoff: true });
+
+      const exportData = (type) => {
+        let headers, rows, filename;
+        if (type === 'conversations') {
+          headers = ['时间', 'AI解决', '置信度', '类别'];
+          rows = appData.conversations.map(c => [c.time, c.aiResolved ? '是' : '否', c.confidence + '%', c.category]);
+          filename = '对话记录';
+        } else if (type === 'knowledge') {
+          headers = ['ID', '分类', '问题', '敏感级别'];
+          rows = appData.knowledgeBase.map(k => [k.id, k.category, k.question_variants[0], k.sensitivity_level]);
+          filename = '知识库';
+        }
+
+        const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
+        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        addLog('导出数据', `导出了 ${type}`);
+      };
+
+      const resetData = () => {
+        if (confirm('确定重置所有数据？这将清除对话、审核队列和统计信息。')) {
+          updateAppData(defaultData);
+          addLog('重置数据', '重置了所有数据');
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-800">系统设置</h2>
+            <p className="text-sm text-slate-500">配置 AI 引擎和人机协作规则</p>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border p-6 space-y-6">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-slate-700">置信度阈值</label>
+                <span className="text-sm text-blue-600 font-medium">{settings.confidenceThreshold}%</span>
+              </div>
+              <input type="range" min="50" max="95" value={settings.confidenceThreshold} onChange={(e) => setSettings({ ...settings, confidenceThreshold: Number(e.target.value) })} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-500" />
+              <p className="text-xs text-slate-500 mt-1">低于此阈值的问题将进入审核队列</p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium text-slate-700">自动转人工</label>
+                <p className="text-xs text-slate-500">用户输入关键词时自动转接人工</p>
+              </div>
+              <button onClick={() => setSettings({ ...settings, autoHandoff: !settings.autoHandoff })} className={`w-12 h-6 rounded-full transition-colors ${settings.autoHandoff ? 'bg-blue-500' : 'bg-slate-300'}`}>
+                <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${settings.autoHandoff ? 'translate-x-6' : 'translate-x-0.5'}`} />
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border p-6 space-y-4">
+            <h3 className="font-medium text-slate-700">数据管理</h3>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => exportData('conversations')} className="px-4 py-2 border rounded-lg hover:bg-slate-50 text-sm flex items-center gap-2">
+                <Icon name="export" className="w-4 h-4" /> 导出对话记录
+              </button>
+              <button onClick={() => exportData('knowledge')} className="px-4 py-2 border rounded-lg hover:bg-slate-50 text-sm flex items-center gap-2">
+                <Icon name="export" className="w-4 h-4" /> 导出知识库
+              </button>
+              <button onClick={resetData} className="px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 text-sm">
+                重置所有数据
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ==================== 效果看板 ====================
+    function Dashboard({ appData }) {
+      const [timeRange, setTimeRange] = useState('7d');
+      const chartRef = useRef(null);
+      const chartInstance = useRef(null);
+
+      const dailyMetrics = generateDailyMetrics();
+      const days = timeRange === '7d' ? 7 : timeRange === '14d' ? 14 : 30;
+      const recentMetrics = dailyMetrics.slice(-days);
+
+      const avgAiRate = recentMetrics.length > 0 ? (recentMetrics.reduce((sum, d) => sum + d.ai_resolution_rate, 0) / recentMetrics.length).toFixed(1) : 0;
+      const avgResponseTime = recentMetrics.length > 0 ? Math.floor(recentMetrics.reduce((sum, d) => sum + d.avg_response_time, 0) / recentMetrics.length) : 0;
+      const avgSatisfaction = appData.stats.satisfactionCount > 0 ? (appData.stats.totalSatisfaction / appData.stats.satisfactionCount).toFixed(1) : '4.5';
+      const totalConversations = appData.stats.totalConversations || recentMetrics.reduce((sum, d) => sum + d.total_conversations, 0);
+
+      useEffect(() => {
+        if (chartInstance.current) {
+          chartInstance.current.destroy();
+        }
+
+        const ctx = chartRef.current?.getContext('2d');
+        if (ctx) {
+          chartInstance.current = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: recentMetrics.map(d => d.date.slice(5)),
+              datasets: [
+                { label: 'AI解决率', data: recentMetrics.map(d => d.ai_resolution_rate), borderColor: '#0052D9', backgroundColor: 'rgba(0,82,217,0.1)', fill: true, tension: 0.4 },
+                { label: '满意度', data: recentMetrics.map(d => d.satisfaction_score * 20), borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.1)', fill: true, tension: 0.4 }
+              ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: false, min: 50, max: 100 } } }
+          });
+        }
+
+        return () => {
+          if (chartInstance.current) chartInstance.current.destroy();
+        };
+      }, [timeRange]);
+
+      const typeData = [
+        { type: '面试流程', count: 156 }, { type: '薪资福利', count: 124 }, { type: '入职准备', count: 98 },
+        { type: '岗位信息', count: 87 }, { type: '公司文化', count: 45 }, { type: '职业发展', count: 37 }
+      ];
+      const total = typeData.reduce((sum, d) => sum + d.count, 0);
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">效果看板</h2>
+              <p className="text-sm text-slate-500">实时监控 AI 助手运行状态</p>
+            </div>
+            <div className="flex items-center gap-2 bg-white rounded-lg p-1 border">
+              {[{ id: '7d', label: '近7天' }, { id: '14d', label: '近14天' }, { id: '30d', label: '近30天' }].map(range => (
+                <button key={range.id} onClick={() => setTimeRange(range.id)} className={`px-3 py-1.5 text-sm rounded-md transition-all ${timeRange === range.id ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+                  {range.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'AI解决率', value: avgAiRate + '%', target: '80%', icon: 'bot', color: 'blue' },
+              { label: '平均响应时长', value: avgResponseTime + '秒', target: '≤30秒', icon: 'activity', color: 'green' },
+              { label: '总对话数', value: totalConversations, target: '累计', icon: 'message', color: 'amber' },
+              { label: '候选人满意度', value: avgSatisfaction, target: '≥4.2分', icon: 'star', color: 'rose' }
+            ].map((kpi, idx) => (
+              <div key={idx} className="bg-white rounded-xl shadow-sm border p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className={`w-10 h-10 rounded-lg bg-${kpi.color}-100 flex items-center justify-center`}>
+                    <Icon name={kpi.icon} className={`w-5 h-5 text-${kpi.color}-600`} />
+                  </div>
+                  <span className="text-xs px-2 py-0.5 bg-slate-100 rounded-full">{kpi.target}</span>
+                </div>
+                <p className="text-2xl font-bold text-slate-800">{kpi.value}</p>
+                <p className="text-sm text-slate-500">{kpi.label}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white rounded-xl shadow-sm border p-4">
+              <h3 className="font-semibold text-slate-800 mb-4">AI解决率 & 满意度趋势</h3>
+              <div className="h-64"><canvas ref={chartRef}></canvas></div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border p-4">
+              <h3 className="font-semibold text-slate-800 mb-4">问题类型分布</h3>
+              <div className="space-y-3">
+                {typeData.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: ['#0052D9', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#06B6D4'][idx] }}></div>
+                      <span className="text-sm text-slate-700">{item.type}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-32 h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: (item.count / total * 100) + '%', backgroundColor: ['#0052D9', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#06B6D4'][idx] }}></div>
+                      </div>
+                      <span className="text-sm font-medium text-slate-800 w-12 text-right">{item.count}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border p-4">
+            <h3 className="font-semibold text-slate-800 mb-4">实时会话统计</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center p-4 bg-slate-50 rounded-lg">
+                <p className="text-2xl font-bold text-blue-600">{appData.stats.totalConversations}</p>
+                <p className="text-sm text-slate-500">总对话数</p>
+              </div>
+              <div className="text-center p-4 bg-slate-50 rounded-lg">
+                <p className="text-2xl font-bold text-green-600">{appData.stats.aiResolved}</p>
+                <p className="text-sm text-slate-500">AI解决数</p>
+              </div>
+              <div className="text-center p-4 bg-slate-50 rounded-lg">
+                <p className="text-2xl font-bold text-amber-600">{appData.stats.humanHandled}</p>
+                <p className="text-sm text-slate-500">人工处理数</p>
+              </div>
+              <div className="text-center p-4 bg-slate-50 rounded-lg">
+                <p className="text-2xl font-bold text-red-600">{appData.stats.sensitiveBlocked}</p>
+                <p className="text-sm text-slate-500">敏感拦截数</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 渲染应用
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
