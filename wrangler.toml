@@ -1,7 +1,0 @@
-name = "hr-ai-assistant"
-main = "index.js"
-compatibility_date = "2024-01-01"
-
-[[kv_namespaces]]
-binding = "HR_MESSAGES"
-id = "758a2bf7e58c4ed1b7de19d8d69b5194"
