@@ -293,7 +293,8 @@
       { id: 'urgent', name: '紧急问题', level: 'urgent', score: 70, description: '人工必要性 ≥ 70分' },
       { id: 'high', name: '高优先级', level: 'high', score: 50, description: '人工必要性 ≥ 50分' },
       { id: 'sensitive', name: '敏感信息', level: 'sensitive', score: 0, description: '涉及敏感关键词' },
-      { id: 'emotion', name: '情绪异常', level: 'emotion', score: 0, description: '检测到负面/紧急情绪' }
+      { id: 'emotion', name: '情绪异常', level: 'emotion', score: 0, description: '检测到负面/紧急情绪' },
+      { id: 'humanSession', name: '人工会话消息', level: 'humanSession', score: 0, description: '候选人发送留言时通知HR' }
     ];
     
     // 加载通知配置
@@ -1299,9 +1300,11 @@
             return { ...prev, humanSessions: [...sessions] };
           });
           
-          // 发送 HR 通知（有新留言）
+          // 发送 HR 通知（有新留言）- 根据触发规则判断
           const notifyConfig = loadNotificationConfig();
-          if (notifyConfig.enabled && notifyConfig.channels.length > 0) {
+          if (notifyConfig.enabled && 
+              notifyConfig.channels.length > 0 && 
+              notifyConfig.rules.includes('humanSession')) {
             sendNotification({
               title: '📩 候选人新留言',
               content: `【${sessionPosition}】的候选人在人工会话中发送了新消息：${inputValue.substring(0, 30)}${inputValue.length > 30 ? '...' : ''}`,
@@ -1570,35 +1573,47 @@
                 {/* 人工模式消息区域 */}
                 {isHumanMode && (
                   <>
-                    {/* 浏览器通知权限提示 */}
-                    {typeof Notification !== 'undefined' && (
-                      <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">🔔</span>
+                    {/* 浏览器通知权限提示 - 候选人端 */}
+                    {typeof Notification !== 'undefined' && Notification.permission !== 'granted' && (
+                      <div className="mb-4 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">🔔</span>
+                            <div>
+                              {Notification.permission === 'default' && (
+                                <>
+                                  <p className="text-sm font-medium text-blue-800">开启消息提醒</p>
+                                  <p className="text-xs text-blue-600">HR 回复时立即通知您</p>
+                                </>
+                              )}
+                              {Notification.permission === 'denied' && (
+                                <>
+                                  <p className="text-sm font-medium text-red-700">通知已被浏览器阻止</p>
+                                  <p className="text-xs text-red-500">请在浏览器设置中允许通知</p>
+                                </>
+                              )}
+                            </div>
+                          </div>
                           {Notification.permission === 'default' && (
-                            <span className="text-sm text-blue-700">开启消息提醒，HR回复时立即通知您</span>
-                          )}
-                          {Notification.permission === 'granted' && (
-                            <span className="text-sm text-green-700">✅ 消息提醒已开启</span>
-                          )}
-                          {Notification.permission === 'denied' && (
-                            <span className="text-sm text-red-600">通知已被浏览器阻止，请在设置中允许通知</span>
+                            <button
+                              onClick={async () => {
+                                const perm = await Notification.requestPermission();
+                                if (perm === 'granted') {
+                                  // 发送测试通知
+                                  new Notification('💬 消息提醒已开启', {
+                                    body: 'HR 回复您的留言时，您将收到通知',
+                                    icon: '📨'
+                                  });
+                                  // 强制刷新状态
+                                  window.location.reload();
+                                }
+                              }}
+                              className="px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors shadow-sm"
+                            >
+                              开启提醒
+                            </button>
                           )}
                         </div>
-                        {Notification.permission === 'default' && (
-                          <button
-                            onClick={() => {
-                              Notification.requestPermission().then(perm => {
-                                if (perm === 'granted') {
-                                  alert('已开启消息提醒！');
-                                }
-                              });
-                            }}
-                            className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
-                          >
-                            开启提醒
-                          </button>
-                        )}
                       </div>
                     )}
                     
@@ -3202,6 +3217,8 @@
                       rule.id === 'urgent' ? 'text-red-600' :
                       rule.id === 'high' ? 'text-amber-600' :
                       rule.id === 'sensitive' ? 'text-purple-600' :
+                      rule.id === 'emotion' ? 'text-orange-600' :
+                      rule.id === 'humanSession' ? 'text-blue-600' :
                       'text-slate-700'
                     }`}>{rule.name}</span>
                     <span className="text-sm text-slate-500 ml-2">{rule.description}</span>
