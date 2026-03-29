@@ -1753,26 +1753,19 @@
                     
                     {/* 问题-答案交替显示 */}
                     {(() => {
-                      // 合并所有消息并按时间排序
-                      const allMessages = [];
-                      
-                      // 添加 HR 的回复
-                      currentSession?.messages?.filter(m => m.role === 'hr').forEach(msg => {
-                        allMessages.push({ ...msg, type: 'hr' });
-                      });
-                      
-                      // 添加候选人的留言
-                      humanMessages.forEach(msg => {
-                        allMessages.push({ ...msg, type: 'user' });
-                      });
-                      
-                      // 按时间排序
-                      allMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                      // 直接使用 currentSession.messages（已包含所有消息）
+                      // 使用 id 去重，避免重复显示
+                      const seenIds = new Set();
+                      const allMessages = (currentSession?.messages || []).filter(msg => {
+                        if (seenIds.has(msg.id)) return false;
+                        seenIds.add(msg.id);
+                        return true;
+                      }).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
                       
                       if (allMessages.length === 0) return null;
                       
                       return allMessages.map((msg, idx) => {
-                        if (msg.type === 'hr') {
+                        if (msg.role === 'hr') {
                           // HR 回复（绿色气泡，右侧）
                           return (
                             <div key={msg.id || `hr-${idx}`} className="flex gap-3 animate-slide-up">
@@ -1803,7 +1796,7 @@
                     })()}
                     
                     {/* 无消息提示 */}
-                    {(!currentSession?.messages?.filter(m => m.role === 'hr').length && !humanMessages.length) && (
+                    {(!currentSession?.messages?.length) && (
                       <div className="text-center py-8">
                         <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
                           <Icon name="message" className="w-8 h-8 text-amber-600" />
@@ -1900,7 +1893,7 @@
                     </div>
                     <div className="p-3 bg-green-50 rounded-lg">
                       <p className="text-xs text-green-600 mb-1">您的留言数</p>
-                      <p className="text-2xl font-bold text-green-600">{humanMessages.length}</p>
+                      <p className="text-2xl font-bold text-green-600">{currentSession?.messages?.filter(m => m.role === 'user').length || 0}</p>
                     </div>
                     <div className="p-3 bg-amber-50 rounded-lg">
                       <p className="text-xs text-amber-600 mb-1">HR 回复数</p>
@@ -2903,10 +2896,13 @@
                           <div className="space-y-3 max-h-64 overflow-y-auto">
                             {/* 问题-答案交替显示 */}
                             {(() => {
-                              // 将所有消息按时间排序，然后交替显示
-                              const allMessages = [...(session.messages || [])].sort((a, b) => 
-                                new Date(a.timestamp) - new Date(b.timestamp)
-                              );
+                              // 使用 id 去重，避免重复显示
+                              const seenIds = new Set();
+                              const allMessages = [...(session.messages || [])].filter(msg => {
+                                if (seenIds.has(msg.id)) return false;
+                                seenIds.add(msg.id);
+                                return true;
+                              }).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
                               let qIndex = 0;
                               let aIndex = 0;
                               const items = [];
