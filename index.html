@@ -2361,8 +2361,13 @@
             // 获取当前所有会话
             const currentSessions = appData.humanSessions || [];
             
-            // 检查是否有新的候选人留言需要同步到本地
+            // 已知的会话 ID 集合
+            const existingSessionIds = new Set(currentSessions.map(s => s.id));
+            
+            // 分离：已有会话的消息 和 需要新建会话的消息
             let hasNewMessages = false;
+            let newSessions = []; // 需要新建的会话
+            
             const updatedSessions = currentSessions.map(session => {
               // 查找该会话对应的 API 消息
               const sessionMessages = candidateMessages.filter(m => m.sessionId === session.id);
@@ -2393,9 +2398,35 @@
               return session;
             });
             
+            // 检查是否有新的会话需要创建（候选人从新设备发送消息）
+            candidateMessages.forEach(apiMsg => {
+              if (!existingSessionIds.has(apiMsg.sessionId)) {
+                // 发现新会话！需要创建
+                const newSession = {
+                  id: apiMsg.sessionId,
+                  position: apiMsg.position || '未选择岗位',
+                  status: 'pending',
+                  created_at: apiMsg.timestamp,
+                  lastMessage: apiMsg.content,
+                  lastMessageTime: apiMsg.timestamp,
+                  messages: [{
+                    id: apiMsg.id || Date.now().toString(),
+                    role: 'user',
+                    content: apiMsg.content,
+                    timestamp: apiMsg.timestamp,
+                    fromAPI: true
+                  }]
+                };
+                newSessions.push(newSession);
+                hasNewMessages = true;
+              }
+            });
+            
+            // 合并更新后的会话和新创建的会话
             if (hasNewMessages) {
-              updateAppData(prev => ({ ...prev, humanSessions: updatedSessions }));
-              setNewMessageCount(prev => prev + 1);
+              const allSessions = [...updatedSessions, ...newSessions];
+              updateAppData(prev => ({ ...prev, humanSessions: allSessions }));
+              setNewMessageCount(prev => prev + newSessions.length);
             }
             
             // 同时检查 localStorage
