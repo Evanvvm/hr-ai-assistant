@@ -69,6 +69,32 @@
         return [];
       }
     };
+
+    // 从 API 获取配置（包含密码）
+    const fetchConfigFromAPI = async () => {
+      try {
+        const resp = await fetch(`${API_BASE_URL}/config`);
+        return await resp.json();
+      } catch (e) {
+        console.error('API 配置获取失败:', e);
+        return { password: 'admin123' };
+      }
+    };
+
+    // 保存配置到 API
+    const saveConfigToAPI = async (config) => {
+      try {
+        const resp = await fetch(`${API_BASE_URL}/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+        return await resp.json();
+      } catch (e) {
+        console.error('API 配置保存失败:', e);
+        return { success: false, error: e.message };
+      }
+    };
     
     // 统一时间戳格式化函数（用于显示友好时间）
     const formatTimestamp = (ts) => {
@@ -723,12 +749,18 @@
         }
 
         setLoading(true);
-        setTimeout(() => {
-          localStorage.setItem('hr-admin-password', newPassword);
+        // 同时保存到 localStorage 和 API
+        Promise.all([
+          new Promise(resolve => {
+            localStorage.setItem('hr-admin-password', newPassword);
+            resolve();
+          }),
+          saveConfigToAPI({ password: newPassword })
+        ]).then(() => {
           setSuccess(true);
           setLoading(false);
           setTimeout(onClose, 1500);
-        }, 500);
+        });
       };
 
       return (
@@ -826,6 +858,22 @@
       useEffect(() => {
         saveData(appData);
       }, [appData]);
+
+      // 启动时从 API 同步密码配置
+      useEffect(() => {
+        const syncPasswordFromAPI = async () => {
+          const config = await fetchConfigFromAPI();
+          if (config && config.password) {
+            // 如果本地没有密码，或者 API 的密码与本地不同，同步到本地
+            const localPassword = localStorage.getItem('hr-admin-password');
+            if (!localPassword || localPassword !== config.password) {
+              localStorage.setItem('hr-admin-password', config.password);
+              console.log('密码已从服务器同步:', config.password);
+            }
+          }
+        };
+        syncPasswordFromAPI();
+      }, []);
 
       const updateAppData = (updater) => {
         setAppData(prev => {
