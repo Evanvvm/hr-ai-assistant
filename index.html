@@ -40,6 +40,36 @@
   <script type="text/babel">
     const { useState, useRef, useEffect, useCallback } = React;
 
+    // ==================== Cloudflare Workers API ====================
+    // 跨设备同步 API（候选人留言 <-> HR回复）
+    const API_BASE_URL = 'https://hr-ai-assistant.evanmxvv.workers.dev';
+
+    // 通过 API 发送候选人留言
+    const sendMessageToAPI = async (message) => {
+      try {
+        const resp = await fetch(`${API_BASE_URL}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(message)
+        });
+        return await resp.json();
+      } catch (e) {
+        console.error('API 发送失败:', e);
+        return { success: false, error: e.message };
+      }
+    };
+
+    // 通过 API 获取所有消息
+    const fetchMessagesFromAPI = async () => {
+      try {
+        const resp = await fetch(`${API_BASE_URL}/messages`);
+        return await resp.json();
+      } catch (e) {
+        console.error('API 获取失败:', e);
+        return [];
+      }
+    };
+
     // ==================== 数据层 ====================
     const knowledgeBase = [
       { id: 'KB-001', category: '面试流程', applicable_positions: ['all'], question_variants: ['面试有几轮', '面试流程是什么', '面试需要多久', '面试安排'], standard_answer: '我们公司招聘流程分为 **3 轮面试**：\n\n1. **HR 初筛**（30 分钟）- 了解您的背景和求职意向\n2. **专业面试**（1 小时）- 部门负责人考察专业能力\n3. **高管终面**（30 分钟）- 了解文化匹配度和成长潜力\n\n整体流程预计 1-2 周，具体时间可能因岗位有所不同。', sensitivity_level: 'low' },
@@ -1081,6 +1111,75 @@
         }
       }, [appData.humanSessions]);
       
+      // ========== 候选人端轮询检查 HR 回复（跨设备同步） ==========
+      useEffect(() => {
+        if (!currentSessionId) return;
+        
+        const pollInterval = setInterval(async () => {
+          try {
+            const apiMessages = await fetchMessagesFromAPI();
+            
+            // 获取当前会话
+            const session = appData.humanSessions?.find(s => s.id === currentSessionId);
+            if (!session) return;
+            
+            // 查找 HR 的回复（hr_reply 类型）
+            const hrReplies = apiMessages.filter(m => 
+              m.type === 'hr_reply' && 
+              m.sessionId === currentSessionId
+            );
+            
+            // 检查是否有本地没有的 HR 回复
+            const localReplyKeys = new Set(
+              (session.messages || [])
+                .filter(m => m.role === 'hr')
+                .map(m => `${m.content}-${m.timestamp}`)
+            );
+            
+            const newReplies = hrReplies.filter(reply => {
+              const key = `${reply.content}-${reply.timestamp}`;
+              return !localReplyKeys.has(key);
+            });
+            
+            if (newReplies.length > 0) {
+              // 有新的 HR 回复，同步到本地
+              updateAppData(prev => {
+                const sessions = prev.humanSessions || [];
+                const sessionIndex = sessions.findIndex(s => s.id === currentSessionId);
+                if (sessionIndex !== -1) {
+                  const existingMsgs = sessions[sessionIndex].messages || [];
+                  newReplies.forEach(reply => {
+                    existingMsgs.push({
+                      id: reply.id || Date.now().toString(),
+                      role: 'hr',
+                      content: reply.content,
+                      timestamp: reply.timestamp,
+                      fromAPI: true
+                    });
+                  });
+                  sessions[sessionIndex].messages = existingMsgs;
+                  sessions[sessionIndex].status = 'replied';
+                }
+                return { ...prev, humanSessions: [...sessions] };
+              });
+              
+              // 发送浏览器通知
+              if (Notification.permission === 'granted') {
+                const latestContent = newReplies[newReplies.length - 1].content;
+                new Notification('💬 HR 已回复您的留言', {
+                  body: latestContent.substring(0, 50) + (latestContent.length > 50 ? '...' : ''),
+                  icon: '📨'
+                });
+              }
+            }
+          } catch (e) {
+            console.log('检查 HR 回复失败', e);
+          }
+        }, 5000); // 每 5 秒检查一次
+        
+        return () => clearInterval(pollInterval);
+      }, [currentSessionId, appData.humanSessions, updateAppData]);
+      
       // 请求浏览器通知权限（候选人端）
       const requestNotificationPermission = () => {
         if ('Notification' in window && Notification.permission === 'default') {
@@ -1277,7 +1376,9 @@
             id: Date.now().toString(), 
             role: 'user', 
             content: inputValue, 
-            timestamp: new Date().toLocaleString('zh-CN') 
+            timestamp: new Date().toLocaleString('zh-CN'),
+            sessionId: currentSessionId,
+            position: selectedPosition || '未选择岗位'
           };
           
           // 添加到本地人工消息
@@ -1298,6 +1399,15 @@
               sessions[sessionIndex].lastMessageTime = new Date().toLocaleString('zh-CN');
             }
             return { ...prev, humanSessions: [...sessions] };
+          });
+          
+          // ========== 发送到 API 实现跨设备同步 ==========
+          sendMessageToAPI({
+            type: 'candidate_message',
+            sessionId: currentSessionId,
+            position: sessionPosition,
+            content: inputValue,
+            timestamp: userMessage.timestamp
           });
           
           // 发送 HR 通知（有新留言）- 根据触发规则判断
@@ -2238,30 +2348,71 @@
       const [newMessageCount, setNewMessageCount] = useState(0); // 新消息数量
       const [lastRefresh, setLastRefresh] = useState(new Date()); // 上次刷新时间
       
-      // 轮询刷新：每 5 秒检查新消息
+      // 轮询刷新：每 5 秒检查 API 新消息（跨设备同步）
       useEffect(() => {
-        const pollInterval = setInterval(() => {
-          // 从 localStorage 重新读取最新数据
+        const pollInterval = setInterval(async () => {
           try {
+            // 从 API 获取跨设备消息
+            const apiMessages = await fetchMessagesFromAPI();
+            
+            // 找出候选人留言（candidate_message 类型）
+            const candidateMessages = apiMessages.filter(m => m.type === 'candidate_message');
+            
+            // 获取当前所有会话
+            const currentSessions = appData.humanSessions || [];
+            
+            // 检查是否有新的候选人留言需要同步到本地
+            let hasNewMessages = false;
+            const updatedSessions = currentSessions.map(session => {
+              // 查找该会话对应的 API 消息
+              const sessionMessages = candidateMessages.filter(m => m.sessionId === session.id);
+              
+              // 检查是否有本地没有的消息
+              const localMessageIds = new Set((session.messages || []).map(m => `${m.role}-${m.content}-${m.timestamp}`));
+              
+              sessionMessages.forEach(apiMsg => {
+                const msgKey = `${apiMsg.role || 'user'}-${apiMsg.content}-${apiMsg.timestamp}`;
+                if (!localMessageIds.has(msgKey)) {
+                  // 发现新消息
+                  hasNewMessages = true;
+                  session.messages = [...(session.messages || []), {
+                    id: apiMsg.id || Date.now().toString(),
+                    role: apiMsg.role || 'user',
+                    content: apiMsg.content,
+                    timestamp: apiMsg.timestamp,
+                    fromAPI: true // 标记来自 API
+                  }];
+                  session.lastMessage = apiMsg.content;
+                  session.lastMessageTime = apiMsg.timestamp;
+                  if (session.status === 'pending') {
+                    session.status = 'pending'; // 保持等待回复状态
+                  }
+                }
+              });
+              
+              return session;
+            });
+            
+            if (hasNewMessages) {
+              updateAppData(prev => ({ ...prev, humanSessions: updatedSessions }));
+              setNewMessageCount(prev => prev + 1);
+            }
+            
+            // 同时检查 localStorage
             const storedData = localStorage.getItem('hr-assistant-data');
             if (storedData) {
               const latestData = JSON.parse(storedData);
               const latestSessions = latestData.humanSessions || [];
-              const currentSessions = appData.humanSessions || [];
-              
-              // 比较消息数量
               const latestTotalMessages = latestSessions.reduce((sum, s) => sum + (s.messages?.length || 0), 0);
               const currentTotalMessages = currentSessions.reduce((sum, s) => sum + (s.messages?.length || 0), 0);
               
               if (latestTotalMessages > currentTotalMessages) {
-                // 有新消息，更新数据
                 updateAppData(() => latestData);
-                // 计算新增消息数量
                 setNewMessageCount(prev => prev + (latestTotalMessages - currentTotalMessages));
               }
-              
-              setLastRefresh(new Date());
             }
+            
+            setLastRefresh(new Date());
           } catch (e) {
             console.log('轮询刷新失败', e);
           }
@@ -2410,6 +2561,15 @@
           addLog('回复人工会话', `回复了会话 ${sessionId}`);
           
           return { ...prev, humanSessions: updatedSessions };
+        });
+
+        // ========== 同步 HR 回复到 API（跨设备同步） ==========
+        sendMessageToAPI({
+          type: 'hr_reply',
+          sessionId: sessionId,
+          position: sessionPosition,
+          content: replyText,
+          timestamp: hrReply.timestamp
         });
 
         // 发送 HR 回复通知
