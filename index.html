@@ -2276,6 +2276,7 @@
       };
 
       const sessions = appData.humanSessions || [];
+      const pendingCount = sessions.filter(s => s.status === 'pending').length || 0;
 
       // 获取所有岗位列表
       const allPositions = [...new Set(sessions.map(s => s.position))];
@@ -2481,9 +2482,9 @@
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-semibold text-slate-800">💬 人工会话管理</h2>
-                {pendingHumanSessions > 0 && (
+                {pendingCount > 0 && (
                   <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded-full">
-                    {pendingHumanSessions} 待回复
+                    {pendingCount} 待回复
                   </span>
                 )}
               </div>
