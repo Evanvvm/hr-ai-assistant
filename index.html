@@ -308,7 +308,10 @@
         enabled: true,
         channels: [], // 已启用的渠道ID列表
         rules: ['urgent', 'high', 'sensitive'], // 触发的规则
-        webhookUrl: '',
+        webhookUrl: '',       // 自定义 Webhook URL
+        wechatWebhookUrl: '', // 企业微信机器人 Webhook URL
+        dingtalkWebhookUrl: '', // 钉钉机器人 Webhook URL
+        feishuWebhookUrl: '',  // 飞书机器人 Webhook URL
         emailAddress: 'hr@company.com',
         notifyOnKnowledgeBaseMiss: true // 知识库无匹配时通知
       };
@@ -321,56 +324,120 @@
       } catch (e) {}
     };
     
-    // 发送通知（模拟实现）
+    // ==================== 发送通知（真实实现）====================
     const sendNotification = async (config, item) => {
       const results = [];
+      const levelText = item.humanNecessityLevel === 'urgent' ? '🚨 紧急' : item.humanNecessityLevel === 'high' ? '⚠️ 高优先级' : '📋 待处理';
+      const levelCN = item.humanNecessityLevel === 'urgent' ? '紧急' : item.humanNecessityLevel === 'high' ? '高' : '中';
+      
+      // 管理员通知内容（含完整问题分析与评分）
+      const adminText = `【HR智能助手】新问题需处理 - ${levelText}\n\n❓ 问题：${item.question}\n📂 应聘岗位：${item.position}\n📊 紧急程度：${item.humanNecessityScore || '-'}分（${levelCN}）\n🔍 分析：${item.context || '知识库无匹配，需人工解答'}\n⏰ 时间：${item.created_at}\n🔗 处理链接：${window.location.href}`;
       
       for (const channelId of config.channels) {
         const channel = NOTIFICATION_CHANNELS.find(c => c.id === channelId);
         if (!channel) continue;
         
         try {
-          // 构造通知内容
-          const content = {
-            title: `【HR助手】新问题待处理 - ${item.humanNecessityLevel === 'urgent' ? '🚨紧急' : item.humanNecessityLevel === 'high' ? '⚠️高优先级' : '📋中等'}`,
-            question: item.question,
-            position: item.position,
-            score: item.humanNecessityScore,
-            level: item.humanNecessityLevel,
-            analysis: item.context,
-            time: item.created_at,
-            url: window.location.href
-          };
-          
-          // 根据渠道类型构造消息
-          let message = '';
-          if (channelId === 'webhook' && config.webhookUrl) {
-            // 自定义 Webhook
-            message = JSON.stringify(content);
-          } else if (channelId === 'email' && config.emailAddress) {
-            message = `主题: ${content.title}\n\n问题: ${content.question}\n岗位: ${content.position}\n人工必要性: ${content.score}分\n分析: ${content.analysis}\n时间: ${content.time}`;
-          } else {
-            // 企业微信/钉钉/飞书 格式化消息
-            message = `${content.title}\n\n❓ 问题：${content.question}\n📂 岗位：${content.position}\n📊 人工必要性：${content.score}分 (${content.level === 'urgent' ? '紧急' : content.level === 'high' ? '高' : '中'})\n🔍 分析：${content.analysis}\n⏰ 时间：${content.time}`;
-          }
-          
-          // 模拟发送（实际需要后端或真实Webhook）
-          console.log(`[通知发送] 渠道: ${channel.name}`, message);
-          
-          // 如果配置了真实Webhook URL，尝试发送
-          if (channelId === 'webhook' && config.webhookUrl) {
-            try {
-              // 在实际环境中，这里会调用真实API
-              // await fetch(config.webhookUrl, { method: 'POST', body: message });
-              results.push({ channel: channel.name, status: 'success', message: '已发送至 Webhook' });
-            } catch (e) {
-              results.push({ channel: channel.name, status: 'error', message: '发送失败: ' + e.message });
+          if (channelId === 'email') {
+            // 邮件：通过 Formsubmit API 直接发送（无需注册，无需 Key，只填邮箱）
+            // 首次发送时收件人会收到一封激活确认邮件，点击一次后永久激活
+            const emailTo = config.emailAddress || '';
+            if (!emailTo) {
+              results.push({ channel: channel.name, status: 'warn', message: '未填写收件邮箱' });
+              continue;
             }
-          } else {
-            results.push({ channel: channel.name, status: 'success', message: '已记录发送任务' });
+            try {
+              const resp = await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(emailTo)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({
+                  _subject: `【HR助手】新问题待处理 - ${levelText} | ${item.question.substring(0, 20)}...`,
+                  _template: 'table',
+                  _captcha: 'false',
+                  message: adminText,
+                  from: 'HR AI 智能助手'
+                })
+              });
+              const data = await resp.json();
+              if (data.success === 'true' || data.success === true) {
+                results.push({ channel: channel.name, status: 'success', message: `邮件已发送至 ${emailTo}` });
+              } else {
+                results.push({ channel: channel.name, status: 'error', message: `发送失败：${data.message || JSON.stringify(data)}` });
+              }
+            } catch (fetchErr) {
+              results.push({ channel: channel.name, status: 'error', message: `发送异常：${fetchErr.message}` });
+            }
+            
+          } else if (['wechat', 'dingtalk', 'feishu'].includes(channelId)) {
+            // 企业微信 / 钉钉 / 飞书：通过各自的机器人 Webhook 发送
+            const webhookUrl = config[channelId + 'WebhookUrl'] || '';
+            if (!webhookUrl) {
+              results.push({ channel: channel.name, status: 'warn', message: '未配置 Webhook URL，跳过发送' });
+              continue;
+            }
+            
+            let payload;
+            if (channelId === 'wechat') {
+              // 企业微信机器人消息格式
+              payload = { msgtype: 'text', text: { content: adminText } };
+            } else if (channelId === 'dingtalk') {
+              // 钉钉机器人消息格式
+              payload = { msgtype: 'text', text: { content: adminText }, at: { isAtAll: false } };
+            } else if (channelId === 'feishu') {
+              // 飞书机器人消息格式
+              payload = { msg_type: 'text', content: { text: adminText } };
+            }
+            
+            try {
+              const resp = await fetch(webhookUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+              if (resp.ok) {
+                results.push({ channel: channel.name, status: 'success', message: '消息已发送' });
+              } else {
+                results.push({ channel: channel.name, status: 'error', message: `发送失败 (HTTP ${resp.status})` });
+              }
+            } catch (fetchErr) {
+              // 跨域或网络错误（常见于本地 Demo）
+              results.push({ channel: channel.name, status: 'error', message: `网络错误：${fetchErr.message}（可能存在跨域限制，建议通过后端代理发送）` });
+            }
+            
+          } else if (channelId === 'webhook') {
+            // 自定义 Webhook
+            const webhookUrl = config.webhookUrl || '';
+            if (!webhookUrl) {
+              results.push({ channel: channel.name, status: 'warn', message: '未填写 Webhook URL' });
+              continue;
+            }
+            const payload = {
+              title: `【HR助手】新问题待处理 - ${levelCN}`,
+              question: item.question,
+              position: item.position,
+              score: item.humanNecessityScore,
+              level: item.humanNecessityLevel,
+              analysis: item.context,
+              time: item.created_at,
+              url: window.location.href
+            };
+            try {
+              const resp = await fetch(webhookUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+              if (resp.ok) {
+                results.push({ channel: channel.name, status: 'success', message: 'Webhook 已响应' });
+              } else {
+                results.push({ channel: channel.name, status: 'error', message: `Webhook 响应异常 (HTTP ${resp.status})` });
+              }
+            } catch (fetchErr) {
+              results.push({ channel: channel.name, status: 'error', message: `发送失败：${fetchErr.message}` });
+            }
           }
         } catch (e) {
-          results.push({ channel: channel.name, status: 'error', message: '处理失败' });
+          results.push({ channel: channel.name, status: 'error', message: '处理异常：' + e.message });
         }
       }
       
@@ -383,6 +450,7 @@
     const defaultData = {
       conversations: [],
       reviewQueue: [],
+      humanSessions: [],  // 人工会话记录
       knowledgeBase: [...knowledgeBase],
       operationLogs: [],
       stats: {
@@ -391,7 +459,8 @@
         humanHandled: 0,
         sensitiveBlocked: 0,
         totalSatisfaction: 0,
-        satisfactionCount: 0
+        satisfactionCount: 0,
+        totalHumanAnswerTime: 0  // 员工实际答疑总时长（分钟）
       }
     };
 
@@ -430,6 +499,7 @@
         edit: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
         trash: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
         eye: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>,
+        eyeOff: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>,
         download: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
         activity: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
         alert: <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
@@ -473,7 +543,7 @@
 
         setTimeout(() => {
           if (username === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.getPassword()) {
-            localStorage.setItem('hr-admin-logged-in', 'true');
+            sessionStorage.setItem('hr-admin-logged-in', 'true');
             localStorage.setItem('hr-admin-username', username);
             // 如果是首次登录且未设置过密码，设置默认密码到localStorage
             if (!localStorage.getItem('hr-admin-password')) {
@@ -527,7 +597,7 @@
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                   >
-                    <Icon name={showPassword ? 'eye' : 'eye'} className="w-5 h-5" />
+                    <Icon name={showPassword ? 'eyeOff' : 'eye'} className="w-5 h-5" />
                   </button>
                 </div>
               </div>
@@ -696,9 +766,9 @@
     // ==================== 主应用 ====================
     function App() {
       const [currentView, setCurrentView] = useState('candidate'); // 'candidate' | 'admin'
-      const [adminSection, setAdminSection] = useState('dashboard'); // 'dashboard' | 'review' | 'knowledge' | 'logs'
+      const [adminSection, setAdminSection] = useState('dashboard'); // 'dashboard' | 'review' | 'knowledge' | 'logs' | 'human'
       const [appData, setAppData] = useState(loadData);
-      const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('hr-admin-logged-in') === 'true');
+      const [isLoggedIn, setIsLoggedIn] = useState(sessionStorage.getItem('hr-admin-logged-in') === 'true');
       const [showLoginModal, setShowLoginModal] = useState(false);
       const [showPasswordModal, setShowPasswordModal] = useState(false);
       const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -735,7 +805,7 @@
       };
 
       const handleLogout = () => {
-        localStorage.removeItem('hr-admin-logged-in');
+        sessionStorage.removeItem('hr-admin-logged-in');
         localStorage.removeItem('hr-admin-username');
         setIsLoggedIn(false);
         setCurrentView('candidate');
@@ -757,9 +827,11 @@
 
       // 管理员侧边栏菜单项 - 计算审核队列紧急数量
       const urgentCount = appData.reviewQueue?.filter(r => r.humanNecessityLevel === 'urgent' || r.humanNecessityLevel === 'high').length || 0;
+      const pendingHumanSessions = appData.humanSessions?.filter(s => s.status === 'pending').length || 0;
       const adminMenuItems = [
         { id: 'dashboard', label: '效果看板', icon: 'chart' },
         { id: 'review', label: '审核队列', icon: 'alert', badge: appData.reviewQueue?.length || 0, urgentBadge: urgentCount },
+        { id: 'human', label: '人工会话', icon: 'message', badge: pendingHumanSessions },
         { id: 'knowledge', label: '知识库', icon: 'database' },
         { id: 'notification', label: '通知设置', icon: 'bell' },
         { id: 'logs', label: '操作日志', icon: 'clock' }
@@ -847,7 +919,9 @@
                           <span>{item.label}</span>
                           {item.badge > 0 && (
                             <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full min-w-[20px] text-center ${
-                              item.urgentBadge > 0 ? 'bg-red-500 text-white' : 'bg-red-500 text-white'
+                              item.urgentBadge > 0 
+                                ? 'bg-red-600 text-white font-bold animate-pulse' 
+                                : 'bg-orange-100 text-orange-700'
                             }`}>
                               {item.urgentBadge > 0 ? `${item.urgentBadge}!` : item.badge}
                             </span>
@@ -896,6 +970,13 @@
                       addLog={addLog}
                     />
                   )}
+                  {adminSection === 'human' && (
+                    <HumanConversationsPanel 
+                      appData={appData} 
+                      updateAppData={updateAppData}
+                      addLog={addLog}
+                    />
+                  )}
                   {adminSection === 'logs' && <OperationLogsPanel appData={appData} />}
                 </div>
               </div>
@@ -926,9 +1007,21 @@
       ]);
       const [inputValue, setInputValue] = useState('');
       const [isTyping, setIsTyping] = useState(false);
+      // 人工服务模式状态
+      const [isHumanMode, setIsHumanMode] = useState(false);
+      const [currentSessionId, setCurrentSessionId] = useState(() => localStorage.getItem('lastHumanSessionId'));
+      const [humanMessages, setHumanMessages] = useState([]);  // 存储人工会话消息
       const [showPositionSelect, setShowPositionSelect] = useState(true);
       const [showRating, setShowRating] = useState(false);
+      const [confidenceThreshold, setConfidenceThreshold] = useState(() => appData.settings?.confidenceThreshold || 70);
       const messagesEndRef = useRef(null);
+      
+      // 监听 appData.settings 变化，更新本地阈值
+      useEffect(() => {
+        if (appData.settings?.confidenceThreshold) {
+          setConfidenceThreshold(appData.settings.confidenceThreshold);
+        }
+      }, [appData.settings]);
 
       const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -936,25 +1029,125 @@
 
       useEffect(() => {
         scrollToBottom();
-      }, [messages]);
+      }, [messages, humanMessages]);
+
+      // 刷新后检测进行中的人工会话（仅在首次加载时运行）
+      useEffect(() => {
+        // 延迟 100ms 确保 appData 已从 localStorage 恢复
+        const timer = setTimeout(() => {
+          if (appData.humanSessions?.length > 0 && currentSessionId) {
+            // 检查当前 sessionId 对应的会话是否还在进行中
+            const session = appData.humanSessions.find(s => s.id === currentSessionId && (s.status === 'pending' || s.status === 'replied'));
+            if (session) {
+              // 有进行中的会话，让用户在初始界面选择是否继续
+              // 不自动进入人工模式
+              setIsHumanMode(false);
+            }
+          }
+        }, 100);
+        
+        return () => clearTimeout(timer);
+        // 注意：不监听 currentSessionId 变化，避免干扰用户主动进入人工模式的操作
+      }, []);
+
+      // 当 HR 回复时，更新本地消息显示
+      useEffect(() => {
+        if (isHumanMode && currentSessionId) {
+          const session = appData.humanSessions?.find(s => s.id === currentSessionId);
+          if (session) {
+            const userMsgs = session.messages?.filter(m => m.role === 'user') || [];
+            setHumanMessages(userMsgs);
+          }
+        }
+      }, [appData.humanSessions]);
 
       // 转人工处理
       const handleTransferToHuman = () => {
+        const sessionId = 'HS-' + Date.now();
+        
         const humanMessage = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: '🔔 您已成功转接 HR 专员！\n\n我们的 HR 同事将会尽快处理您的问题，请稍候。通常响应时间为 5-10 分钟。\n\n感谢您的耐心等待！',
+          content: '好的，已为您接通 HR 专员 👋\n\n请稍候，我们的 HR 同事将尽快与您沟通。\n\n💬 您可以继续留言，HR 同事会在这里回复您。',
           timestamp: new Date(),
           metadata: { confidence: 100, category: '转人工', needs_human: true, humanNecessityScore: 100, humanNecessityLevel: 'urgent' }
         };
+        
+        // 构建转人工的审核队列条目
+        const reviewItem = {
+          id: 'RQ-' + Date.now(),
+          question: selectedPosition ? `【${selectedPosition}】转人工请求` : '转人工请求',
+          context: '用户主动请求转人工服务',
+          position: selectedPosition || '未选择岗位',
+          confidence: 100,
+          status: 'pending',
+          created_at: new Date().toLocaleString('zh-CN'),
+          humanNecessityScore: 100,
+          humanNecessityLevel: 'urgent',
+          intentCategory: '转人工',
+          suggestion: '请及时联系用户处理',
+          emotions: {
+            negative: false,
+            urgent: false
+          }
+        };
+        
         setMessages(prev => [...prev, humanMessage]);
+        
+        // 创建人工会话记录
+        const humanConversation = {
+          id: sessionId,
+          position: selectedPosition || '未选择岗位',
+          messages: [],
+          status: 'pending',  // pending | replied | closed
+          created_at: new Date().toLocaleString('zh-CN'),
+          replied_at: null,
+          closed_at: null
+        };
+        
         updateAppData(prev => ({
           ...prev,
-          stats: { ...prev.stats, humanHandled: prev.stats.humanHandled + 1 }
+          conversations: [...(prev.conversations || []), {
+            id: Date.now().toString(),
+            time: new Date().toLocaleString('zh-CN'),
+            question: '转人工',
+            answer: '已为您接通 HR 专员',
+            aiResolved: false,
+            confidence: 100,
+            category: '转人工',
+            satisfaction: null,
+            sessionId: sessionId
+          }].slice(-200),
+          humanSessions: [...(prev.humanSessions || []), humanConversation],
+          reviewQueue: [...prev.reviewQueue, reviewItem],
+          stats: { 
+            ...prev.stats, 
+            totalConversations: prev.stats.totalConversations + 1,
+            humanHandled: prev.stats.humanHandled + 1,
+            totalHumanAnswerTime: prev.stats.totalHumanAnswerTime + 8  // 每次人工答疑估算8分钟
+          }
         }));
+        
+        // 进入人工模式
+        setIsHumanMode(true);
+        setCurrentSessionId(sessionId);
+        localStorage.setItem('lastHumanSessionId', sessionId);  // 持久化会话ID
+        setHumanMessages([]);
+        
+        // 发送转人工通知
+        const notifyConfig = loadNotificationConfig();
+        if (notifyConfig.enabled && notifyConfig.channels.length > 0) {
+          sendNotification({
+            title: '🔔 有人请求转人工服务',
+            content: `用户选择了【${selectedPosition || '未选择岗位'}】并请求转人工服务，请及时处理。`,
+            type: 'urgent',
+            channels: notifyConfig.channels,
+            config: notifyConfig
+          });
+        }
       };
 
-      const searchKnowledgeBase = (query) => {
+      const searchKnowledgeBase = (query, confidenceThreshold = 70) => {
         const queryLower = query.toLowerCase();
 
         // 先进行问题分析（用于人工必要性评分）
@@ -964,7 +1157,7 @@
           if (queryLower.includes(keyword)) {
             return { 
               type: 'sensitive', 
-              answer: '这个问题涉及较敏感的信息，我已为您转接 HR 专员，预计 5 分钟内回复您。💬\n\n建议您也可以直接联系 HR：hr@company.com',
+              answer: '您好，该问题由 HR 专员为您专项解答，已为您安排转接，请稍候片刻 💬',
               confidence: 50,
               questionAnalysis
             };
@@ -1025,7 +1218,7 @@
         if (bestMatch && (isExactMatch || (bestScore >= 25 && matchRatio >= 0.5))) {
           const confidence = Math.min(95, bestScore + 60);
           return { 
-            type: confidence < 70 ? 'low_confidence' : 'success', 
+            type: confidence < confidenceThreshold ? 'low_confidence' : 'success', 
             answer: bestMatch.standard_answer, 
             confidence, 
             category: bestMatch.category,
@@ -1037,27 +1230,15 @@
         // 基于问题分析增强评分
         const finalScore = Math.max(questionAnalysis.humanNecessityScore, 60); // 无匹配至少60分
         const finalLevel = finalScore >= 70 ? 'urgent' : finalScore >= 50 ? 'high' : 'medium';
-        
-        const levelIcon = finalLevel === 'urgent' ? '🚨' : finalLevel === 'high' ? '⚠️' : '⚡';
-        const levelText = finalLevel === 'urgent' ? '紧急' : finalLevel === 'high' ? '高' : '中';
-        const levelColor = finalLevel === 'urgent' ? 'red' : finalLevel === 'high' ? 'amber' : 'blue';
 
-        let answerContent = `📋 **问题已记录 - 知识库暂无此条目**\n\n`;
-        
-        // 添加问题分析结果
-        if (questionAnalysis.reason.length > 0) {
-          answerContent += `**问题分析**：${questionAnalysis.reason.join('、')}\n\n`;
-        }
-        
-        // 添加人工必要性评分
-        answerContent += `${levelIcon} **人工参与必要性**：${levelText}（${finalScore}分/100分）\n\n`;
-        answerContent += `💡 您的疑问已转交 HR 专员处理，预计 5-10 分钟内给您专业解答。\n\n`;
-        answerContent += `📧 如需紧急处理，请联系：hr@company.com`;
+        // 候选人端只展示简洁友好提示，不暴露技术评分细节
+        const answerContent = `感谢您的提问 🙏\n\n您咨询的问题已由 HR 专员接手处理，我们会尽快为您回复，请稍候片刻。\n\n如有紧急需要，也可直接联系：hr@company.com`;
 
         return { 
           type: 'no_match', 
           answer: answerContent,
           confidence: 30,
+          // 详细分析只存入 metadata，供管理员后台使用，不展示给候选人
           questionAnalysis: {
             ...questionAnalysis,
             humanNecessityScore: finalScore,
@@ -1070,6 +1251,34 @@
       const handleSend = () => {
         if (!inputValue.trim()) return;
 
+        // 人工模式：发送留言给HR
+        if (isHumanMode && currentSessionId) {
+          const userMessage = { 
+            id: Date.now().toString(), 
+            role: 'user', 
+            content: inputValue, 
+            timestamp: new Date().toLocaleString('zh-CN') 
+          };
+          
+          // 添加到本地人工消息
+          setHumanMessages(prev => [...prev, userMessage]);
+          setInputValue('');
+          
+          // 保存到全局人工会话
+          updateAppData(prev => {
+            const sessions = prev.humanSessions || [];
+            const sessionIndex = sessions.findIndex(s => s.id === currentSessionId);
+            if (sessionIndex !== -1) {
+              sessions[sessionIndex].messages = [...(sessions[sessionIndex].messages || []), userMessage];
+              sessions[sessionIndex].lastMessage = inputValue;
+              sessions[sessionIndex].lastMessageTime = new Date().toLocaleString('zh-CN');
+            }
+            return { ...prev, humanSessions: [...sessions] };
+          });
+          
+          return;
+        }
+
         // 检测"转人工"
         if (inputValue.includes('转人工')) {
           const userMessage = { id: Date.now().toString(), role: 'user', content: inputValue, timestamp: new Date() };
@@ -1079,7 +1288,7 @@
             const humanMessage = {
               id: (Date.now() + 1).toString(),
               role: 'assistant',
-              content: '🔔 您已成功转接 HR 专员！\n\n我们的 HR 同事将会尽快处理您的问题，请稍候。通常响应时间为 5-10 分钟。\n\n感谢您的耐心等待！',
+              content: '好的，已为您接通 HR 专员 👋\n\n请稍候，我们的 HR 同事将尽快与您沟通。',
               timestamp: new Date(),
               metadata: { confidence: 100, category: '转人工', needs_human: true, humanNecessityScore: 100, humanNecessityLevel: 'urgent' }
             };
@@ -1098,7 +1307,7 @@
         setIsTyping(true);
 
         setTimeout(() => {
-          const result = searchKnowledgeBase(inputValue);
+          const result = searchKnowledgeBase(inputValue, confidenceThreshold);
           let aiContent = result.answer;
           let needsHuman = result.type === 'no_match' || result.type === 'sensitive' || result.type === 'low_confidence';
           
@@ -1127,9 +1336,20 @@
           setMessages(prev => [...prev, aiMessage]);
           setIsTyping(false);
 
-          // 更新统计数据
+          // 更新统计数据 & 保存对话记录
           updateAppData(prev => ({
             ...prev,
+            conversations: [...(prev.conversations || []), {
+              id: Date.now().toString(),
+              time: new Date().toLocaleString('zh-CN'),
+              question: userMessage,
+              answer: aiContent,
+              aiResolved: !needsHuman,
+              confidence: result.confidence || 0,
+              category: result.category || '未分类',
+              satisfaction: null,
+              responseTime: 0
+            }].slice(-200),
             stats: {
               ...prev.stats,
               totalConversations: prev.stats.totalConversations + 1,
@@ -1195,18 +1415,30 @@
       };
 
       const handleRating = (rating) => {
-        updateAppData(prev => ({
-          ...prev,
-          stats: {
-            ...prev.stats,
-            totalSatisfaction: prev.stats.totalSatisfaction + rating,
-            satisfactionCount: prev.stats.satisfactionCount + 1
-          }
-        }));
+        updateAppData(prev => {
+          const label = rating === 5 ? '满意' : rating === 3 ? '一般' : '不满';
+          const convs = prev.conversations || [];
+          const lastConv = convs[convs.length - 1];
+          return {
+            ...prev,
+            conversations: lastConv
+              ? convs.map((c, i) => i === convs.length - 1 ? { ...c, satisfaction: label } : c)
+              : convs,
+            stats: {
+              ...prev.stats,
+              totalSatisfaction: prev.stats.totalSatisfaction + rating,
+              satisfactionCount: prev.stats.satisfactionCount + 1
+            }
+          };
+        });
         setShowRating(false);
       };
 
       const questions = [...quickQuestions.all, ...(quickQuestions[selectedPosition] || [])];
+
+      // 获取当前会话的HR回复
+      const currentSession = appData.humanSessions?.find(s => s.id === currentSessionId);
+      const hrReplies = currentSession?.messages?.filter(m => m.role === 'hr') || [];
 
       return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1214,30 +1446,144 @@
             <div className="bg-white rounded-xl shadow-sm border h-[500px] md:h-[600px] flex flex-col">
               {showPositionSelect && (
                 <div className="p-4 border-b bg-blue-50">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                        <Icon name="bot" className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <p className="text-sm text-slate-600">您正在咨询：</p>
-                        <select value={selectedPosition} onChange={(e) => setSelectedPosition(e.target.value)} className="text-blue-600 font-medium bg-transparent border-none focus:outline-none">
-                          <option value="技术岗">技术岗</option>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                      <Icon name="bot" className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-600">您正在咨询：</p>
+                      <select value={selectedPosition} onChange={(e) => setSelectedPosition(e.target.value)} className="text-blue-600 font-medium bg-transparent border-none focus:outline-none">
+                        <option value="技术岗">技术岗</option>
                           <option value="销售岗">销售岗</option>
                           <option value="运营岗">运营岗</option>
                           <option value="管理岗">管理岗</option>
-                        </select>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+
+              {/* 人工模式顶部提示 */}
+              {isHumanMode && (
+                <div className="p-3 border-b bg-amber-50 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
+                      <Icon name="user" className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-amber-800">人工服务模式</p>
+                      <p className="text-xs text-amber-600">您的留言将发送给 HR 同事</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        // 退出人工模式，保留会话ID和消息记录
+                        setIsHumanMode(false);
+                        setHumanMessages([]);
+                      }} 
+                      className="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                    >
+                      返回
+                    </button>
+                    <button 
+                      onClick={() => {
+                        // 开始新对话，清除所有状态
+                        setIsHumanMode(false);
+                        setCurrentSessionId(null);
+                        localStorage.removeItem('lastHumanSessionId');
+                        setHumanMessages([]);
+                        setMessages([]);
+                      }} 
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors text-sm font-medium"
+                    >
+                      开始新对话
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 继续会话通知（固定在聊天区域上方） */}
+              {!isHumanMode && currentSessionId && appData.humanSessions?.find(s => s.id === currentSessionId && (s.status === 'pending' || s.status === 'replied')) && (
+                <div className="px-4 py-3 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                        <Icon name="message" className="w-5 h-5 text-amber-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-amber-800">您有人工会话待处理</p>
+                        {hrReplies.length > 0 ? (
+                          <p className="text-xs text-amber-600">HR 已回复您的留言</p>
+                        ) : (
+                          <p className="text-xs text-amber-600">您可以继续留言，HR同事会在人工窗口回复您</p>
+                        )}
                       </div>
                     </div>
-                    <button onClick={() => setShowPositionSelect(false)} className="text-sm text-slate-500 hover:text-slate-700">收起</button>
+                    <button 
+                      onClick={() => {
+                        const session = appData.humanSessions?.find(s => s.id === currentSessionId);
+                        const userMsgs = session?.messages?.filter(m => m.role === 'user') || [];
+                        setIsHumanMode(true);
+                        setHumanMessages(userMsgs);
+                      }}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
+                    >
+                      继续会话
+                    </button>
                   </div>
                 </div>
               )}
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4 chat-scroll">
-                {messages.map(message => (
+                {/* AI对话消息（人工模式前的内容） */}
+                {!isHumanMode && messages.map(message => (
                   <MessageBubble key={message.id} message={message} onTransferHuman={handleTransferToHuman} />
                 ))}
+                
+                {/* 人工模式消息区域 */}
+                {isHumanMode && (
+                  <>
+                    {/* HR的回复 */}
+                    {currentSession?.messages?.filter(m => m.role === 'hr').map((msg, idx) => (
+                      <div key={msg.id || idx} className="flex gap-3 animate-slide-up">
+                        <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                          <Icon name="user" className="w-4 h-4 text-green-600" />
+                        </div>
+                        <div className="bg-green-50 rounded-2xl rounded-tl-sm px-4 py-3 border border-green-200 max-w-[80%]">
+                          <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
+                          <p className="text-xs text-slate-400 mt-1">{msg.timestamp}</p>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* 候选人的留言 */}
+                    {humanMessages.map((msg, idx) => (
+                      <div key={msg.id || idx} className="flex gap-3 animate-slide-up flex-row-reverse">
+                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                          <Icon name="user" className="w-4 h-4 text-blue-600" />
+                        </div>
+                        <div className="bg-blue-500 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[80%]">
+                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                          <p className="text-xs text-blue-200 mt-1">{msg.timestamp}</p>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* 无消息提示 */}
+                    {(!currentSession?.messages?.filter(m => m.role === 'hr').length && !humanMessages.length) && (
+                      <div className="text-center py-8">
+                        <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                          <Icon name="message" className="w-8 h-8 text-amber-600" />
+                        </div>
+                        <p className="text-slate-600">请在下方输入您的问题</p>
+                        <p className="text-sm text-slate-400">您可以继续留言,HR同事会在人工窗口回复您</p>
+                      </div>
+                    )}
+                  </>
+                )}
+                
                 {isTyping && (
                   <div className="flex gap-3 animate-fade-in">
                     <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
@@ -1266,35 +1612,84 @@
 
               <div className="p-4 border-t bg-slate-50">
                 <div className="flex gap-2">
-                  <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSend()} placeholder="输入您的问题..." className="flex-1 px-4 py-2.5 rounded-lg border bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  <button onClick={handleSend} disabled={!inputValue.trim()} className="px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                  <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSend()} placeholder={isHumanMode ? "给 HR 留言..." : "输入您的问题..."} className="flex-1 px-4 py-2.5 rounded-lg border bg-white focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  <button onClick={handleSend} disabled={!inputValue.trim()} className={`px-4 py-2.5 rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${isHumanMode ? 'bg-green-600 text-white' : 'bg-blue-600 text-white'}`}>
                     <Icon name="send" className="w-4 h-4" />
                   </button>
-                  <button onClick={handleTransferToHuman} className="px-4 py-2.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center gap-2" title="转人工服务">
-                    <Icon name="user" className="w-4 h-4" />
-                    <span className="hidden sm:inline text-sm">转人工</span>
-                  </button>
+                  {!isHumanMode && (
+                    <button onClick={handleTransferToHuman} className="px-4 py-2.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center gap-2" title="转人工服务">
+                      <Icon name="user" className="w-4 h-4" />
+                      <span className="hidden sm:inline text-sm">转人工</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           </div>
 
+          {/* 右侧面板 */}
           <div className="lg:col-span-1">
-            <div className="bg-white rounded-xl shadow-sm border h-[500px] md:h-[600px] flex flex-col">
-              <div className="p-4 border-b">
-                <h3 className="font-semibold text-slate-800">快捷问题</h3>
-                <p className="text-sm text-slate-500">点击直接获取答案</p>
+            {/* AI模式：显示快捷问题 */}
+            {!isHumanMode && (
+              <div className="bg-white rounded-xl shadow-sm border h-[500px] md:h-[600px] flex flex-col">
+                <div className="p-4 border-b">
+                  <h3 className="font-semibold text-slate-800">快捷问题</h3>
+                  <p className="text-sm text-slate-500">点击直接获取答案</p>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4">
+                  <div className="space-y-2">
+                    {questions.map((q, idx) => (
+                      <button key={q.id || idx} onClick={() => { setInputValue(q.text); setTimeout(handleSend, 100); }} className="w-full text-left px-4 py-3 rounded-lg bg-slate-50 hover:bg-blue-50 hover:text-blue-700 transition-all flex items-center gap-3 group">
+                        <Icon name={q.icon || 'message'} className="w-4 h-4 text-blue-500" />
+                        <span className="text-sm">{q.text}</span>
+                        <Icon name="arrowRight" className="w-4 h-4 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                {questions.map((q, idx) => (
-                  <button key={q.id || idx} onClick={() => { setInputValue(q.text); setTimeout(handleSend, 100); }} className="w-full text-left px-4 py-3 rounded-lg bg-slate-50 hover:bg-blue-50 hover:text-blue-700 transition-all flex items-center gap-3 group">
-                    <Icon name={q.icon || 'message'} className="w-4 h-4 text-blue-500" />
-                    <span className="text-sm">{q.text}</span>
-                    <Icon name="arrowRight" className="w-4 h-4 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </button>
-                ))}
+            )}
+            
+            {/* 人工模式：显示会话状态 */}
+            {isHumanMode && (
+              <div className="bg-white rounded-xl shadow-sm border h-[500px] md:h-[600px] flex flex-col">
+                <div className="p-4 border-b bg-amber-50">
+                  <h3 className="font-semibold text-slate-800">💬 会话状态</h3>
+                  <p className="text-sm text-slate-500">HR 同事正在处理中</p>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4">
+                  <div className="space-y-4">
+                    <div className="p-3 bg-blue-50 rounded-lg">
+                      <p className="text-xs text-blue-600 mb-1">应聘岗位</p>
+                      <p className="text-sm font-medium text-slate-700">{selectedPosition}</p>
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-lg">
+                      <p className="text-xs text-slate-500 mb-1">会话ID</p>
+                      <p className="text-sm font-mono text-slate-600">{currentSessionId}</p>
+                    </div>
+                    <div className="p-3 bg-green-50 rounded-lg">
+                      <p className="text-xs text-green-600 mb-1">您的留言数</p>
+                      <p className="text-2xl font-bold text-green-600">{humanMessages.length}</p>
+                    </div>
+                    <div className="p-3 bg-amber-50 rounded-lg">
+                      <p className="text-xs text-amber-600 mb-1">HR 回复数</p>
+                      <p className="text-2xl font-bold text-amber-600">{currentSession?.messages?.filter(m => m.role === 'hr').length || 0}</p>
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-lg">
+                      <p className="text-xs text-slate-500 mb-1">会话状态</p>
+                      <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${currentSession?.status === 'replied' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {currentSession?.status === 'replied' ? '已回复' : '待回复'}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-6 p-4 bg-amber-50 rounded-lg">
+                    <p className="text-sm text-amber-800 font-medium mb-2">💡 温馨提示</p>
+                    <p className="text-xs text-amber-600">HR 同事会尽快查看您的留言并回复。请保持页面开启，或稍后刷新查看回复。</p>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       );
@@ -1324,30 +1719,31 @@
             </div>
           )}
           <div className={`max-w-[80%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
-            <div className={`px-4 py-3 rounded-2xl ${isUser ? 'bg-blue-500 text-white rounded-tr-sm' : message.metadata?.needs_human ? `${necessityStyle?.bg} ${necessityStyle?.border} border rounded-tl-sm` : 'bg-white rounded-tl-sm shadow-sm border'}`}>
+            <div className={`px-4 py-3 rounded-2xl ${
+              isUser
+                ? 'bg-blue-500 text-white rounded-tr-sm'
+                : isNeedsHuman && message.metadata?.category !== '转人工'
+                  ? 'bg-amber-50 border border-amber-200 rounded-tl-sm'
+                  : isNeedsHuman
+                    ? 'bg-green-50 border border-green-200 rounded-tl-sm'
+                    : 'bg-white rounded-tl-sm shadow-sm border'
+            }`}>
               <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
             </div>
             {!isUser && (
               <div className="flex items-center gap-2 px-1 flex-wrap">
-                {message.metadata?.confidence && (
+                {/* 仅对知识库命中的正常回复显示置信度，转人工/无匹配不展示技术指标 */}
+                {message.metadata?.confidence && !isNeedsHuman && (
                   <span className={`text-xs ${message.metadata.confidence >= 70 ? 'text-green-600' : 'text-amber-600'}`}>
                     置信度 {message.metadata.confidence}%
                   </span>
                 )}
-                {message.metadata?.category && (
+                {message.metadata?.category && !isNeedsHuman && (
                   <><span className="text-slate-300">•</span><span className="text-xs text-slate-500">{message.metadata.category}</span></>
-                )}
-                {message.metadata?.humanNecessityLevel && message.metadata.humanNecessityLevel !== 'low' && (
-                  <>
-                    <span className="text-slate-300">•</span>
-                    <span className={`text-xs ${necessityStyle?.text} font-medium`}>
-                      人工必要性: {message.metadata.humanNecessityLevel === 'urgent' ? '紧急' : message.metadata.humanNecessityLevel === 'high' ? '高' : '中'} ({message.metadata.humanNecessityScore}分)
-                    </span>
-                  </>
                 )}
               </div>
             )}
-            {/* 转人工按钮 - 当需要人工处理时显示 */}
+            {/* 转人工按钮 - 仅当候选人主动点击"转人工"按钮前的AI回复且已标记为需要人工时显示（提供再次确认入口）*/}
             {isNeedsHuman && onTransferHuman && message.metadata?.category !== '转人工' && (
               <div className="mt-2">
                 <button 
@@ -1355,7 +1751,7 @@
                   className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all shadow-md hover:shadow-lg flex items-center gap-2"
                 >
                   <Icon name="user" className="w-4 h-4" />
-                  转接人工服务
+                  已转人工，点击确认
                 </button>
               </div>
             )}
@@ -1487,8 +1883,9 @@
                       <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs ${item.sensitivity_level === 'low' ? 'bg-green-50 text-green-600' : item.sensitivity_level === 'medium' ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>{item.sensitivity_level === 'low' ? '低' : item.sensitivity_level === 'medium' ? '中' : '高'}</span></td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <button onClick={() => setEditingItem(item)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"><Icon name="eye" className="w-4 h-4" /></button>
-                          <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600"><Icon name="trash" className="w-4 h-4" /></button>
+                          <button onClick={() => setEditingItem(item)} className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-500 hover:text-blue-600" title="查看"><Icon name="eye" className="w-4 h-4" /></button>
+                          <button onClick={() => setEditingItem({ ...item, isEdit: true })} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-500 hover:text-amber-600" title="编辑"><Icon name="edit" className="w-4 h-4" /></button>
+                          <button onClick={() => handleDelete(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600" title="删除"><Icon name="trash" className="w-4 h-4" /></button>
                         </div>
                       </td>
                     </tr>
@@ -1498,22 +1895,38 @@
             </div>
           </div>
 
-          {/* 详情弹窗 */}
+          {/* 详情/编辑弹窗 */}
           {editingItem && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-xl max-w-lg w-full max-h-[80vh] overflow-y-auto">
                 <div className="p-6">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold">知识库详情</h3>
+                    <h3 className="text-lg font-semibold">{editingItem.isEdit ? '编辑知识库' : '知识库详情'}</h3>
                     <button onClick={() => setEditingItem(null)} className="p-1 hover:bg-slate-100 rounded"><Icon name="x" className="w-5 h-5" /></button>
                   </div>
-                  <div className="space-y-4">
-                    <div><label className="text-sm text-slate-500">ID</label><p className="font-mono text-sm">{editingItem.id}</p></div>
-                    <div><label className="text-sm text-slate-500">分类</label><p>{editingItem.category}</p></div>
-                    <div><label className="text-sm text-slate-500">适用岗位</label><p>{editingItem.applicable_positions.join(', ')}</p></div>
-                    <div><label className="text-sm text-slate-500">问题变体</label><p>{editingItem.question_variants.join(' / ')}</p></div>
-                    <div><label className="text-sm text-slate-500">标准答案</label><p className="whitespace-pre-wrap bg-slate-50 p-3 rounded-lg text-sm">{editingItem.standard_answer}</p></div>
-                  </div>
+                  {editingItem.isEdit ? (
+                    <EditKnowledgeModal 
+                      item={editingItem} 
+                      onSave={(updatedItem) => {
+                        const { isEdit, ...itemData } = updatedItem;
+                        updateAppData(prev => ({ 
+                          ...prev, 
+                          knowledgeBase: prev.knowledgeBase.map(k => k.id === itemData.id ? itemData : k)
+                        }));
+                        addLog('编辑知识库', `更新了 ${itemData.id}`);
+                        setEditingItem(null);
+                      }} 
+                      onCancel={() => setEditingItem(null)} 
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      <div><label className="text-sm text-slate-500">ID</label><p className="font-mono text-sm">{editingItem.id}</p></div>
+                      <div><label className="text-sm text-slate-500">分类</label><p>{editingItem.category}</p></div>
+                      <div><label className="text-sm text-slate-500">适用岗位</label><p>{editingItem.applicable_positions.join(', ')}</p></div>
+                      <div><label className="text-sm text-slate-500">问题变体</label><p>{editingItem.question_variants.join(' / ')}</p></div>
+                      <div><label className="text-sm text-slate-500">标准答案</label><p className="whitespace-pre-wrap bg-slate-50 p-3 rounded-lg text-sm">{editingItem.standard_answer}</p></div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1613,6 +2026,551 @@
       );
     }
 
+    function EditKnowledgeModal({ item, onSave, onCancel }) {
+      const positions = ['all', '技术岗', '销售岗', '运营岗', '管理岗'];
+      const [form, setForm] = useState({
+        category: item.category,
+        question: item.question_variants.join('\n'),
+        answer: item.standard_answer,
+        sensitivity_level: item.sensitivity_level,
+        applicable_positions: item.applicable_positions
+      });
+
+      const handleSubmit = () => {
+        if (!form.question.trim() || !form.answer.trim()) return;
+        onSave({
+          ...item,
+          id: item.id,
+          category: form.category,
+          applicable_positions: form.applicable_positions,
+          question_variants: form.question.split('\n').filter(q => q.trim()),
+          standard_answer: form.answer,
+          sensitivity_level: form.sensitivity_level
+        });
+      };
+
+      const togglePosition = (pos) => {
+        if (pos === 'all') {
+          setForm({ ...form, applicable_positions: ['all'] });
+        } else {
+          const current = form.applicable_positions.filter(p => p !== 'all');
+          if (current.includes(pos)) {
+            const newPos = current.filter(p => p !== pos);
+            setForm({ ...form, applicable_positions: newPos.length === 0 ? ['all'] : newPos });
+          } else {
+            setForm({ ...form, applicable_positions: [...current, pos] });
+          }
+        }
+      };
+
+      return (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">分类</label>
+            <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border">
+              {['面试流程', '公司介绍', '福利政策', '入职流程', '办公环境', '技术要求', '技术面试', '职业发展', '薪资结构', '日常工作', 'KPI考核', '团队配置'].map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">适用岗位</label>
+            <div className="flex flex-wrap gap-2">
+              {positions.map(pos => (
+                <button
+                  key={pos}
+                  type="button"
+                  onClick={() => togglePosition(pos)}
+                  className={`px-3 py-1.5 rounded-full text-sm transition-all ${
+                    form.applicable_positions.includes(pos)
+                      ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                      : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {pos === 'all' ? '全部岗位' : pos}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">问题变体（每行一个）</label>
+            <textarea
+              value={form.question}
+              onChange={(e) => setForm({ ...form, question: e.target.value })}
+              rows={3}
+              className="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              placeholder="输入问题，每行一个..."
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">标准答案</label>
+            <textarea
+              value={form.answer}
+              onChange={(e) => setForm({ ...form, answer: e.target.value })}
+              rows={4}
+              className="w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              placeholder="输入标准答案..."
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">敏感级别</label>
+            <select value={form.sensitivity_level} onChange={(e) => setForm({ ...form, sensitivity_level: e.target.value })} className="w-full px-3 py-2 rounded-lg border">
+              <option value="low">低敏感</option>
+              <option value="medium">中敏感</option>
+              <option value="high">高敏感</option>
+            </select>
+          </div>
+          <div className="flex justify-end gap-3 pt-4">
+            <button onClick={onCancel} className="px-4 py-2 border rounded-lg hover:bg-slate-50">取消</button>
+            <button onClick={handleSubmit} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存修改</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ==================== 人工会话管理面板 ====================
+    function HumanConversationsPanel({ appData, updateAppData, addLog }) {
+      const [selectedSession, setSelectedSession] = useState(null);
+      const [replyText, setReplyText] = useState('');
+      const [filterStatus, setFilterStatus] = useState('all'); // all, pending, replied, closed
+      const [filterPosition, setFilterPosition] = useState('all'); // all, 技术岗, 销售岗, etc
+      const [searchKeyword, setSearchKeyword] = useState('');
+      const [expandedSessions, setExpandedSessions] = useState({});
+      const [selectedSessions, setSelectedSessions] = useState([]); // 批量选择
+
+      const sessions = appData.humanSessions || [];
+
+      // 获取所有岗位列表
+      const allPositions = [...new Set(sessions.map(s => s.position))];
+
+      // 根据状态、岗位、关键词筛选
+      const filteredSessions = sessions.filter(s => {
+        // 状态筛选
+        if (filterStatus !== 'all' && s.status !== filterStatus) return false;
+        // 岗位筛选
+        if (filterPosition !== 'all' && s.position !== filterPosition) return false;
+        // 关键词搜索
+        if (searchKeyword.trim()) {
+          const keyword = searchKeyword.toLowerCase();
+          const positionMatch = s.position.toLowerCase().includes(keyword);
+          const messageMatch = s.messages?.some(m => 
+            m.content.toLowerCase().includes(keyword)
+          );
+          const idMatch = s.id.toLowerCase().includes(keyword);
+          if (!positionMatch && !messageMatch && !idMatch) return false;
+        }
+        return true;
+      }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      // 批量选择/取消选择
+      const toggleSelectSession = (sessionId) => {
+        setSelectedSessions(prev => 
+          prev.includes(sessionId) 
+            ? prev.filter(id => id !== sessionId)
+            : [...prev, sessionId]
+        );
+      };
+
+      // 全选/取消全选
+      const toggleSelectAll = () => {
+        if (selectedSessions.length === filteredSessions.length) {
+          setSelectedSessions([]);
+        } else {
+          setSelectedSessions(filteredSessions.map(s => s.id));
+        }
+      };
+
+      // 批量关闭会话
+      const handleBatchClose = () => {
+        if (selectedSessions.length === 0) return;
+        
+        updateAppData(prev => {
+          const updatedSessions = prev.humanSessions.map(s => {
+            if (selectedSessions.includes(s.id) && s.status !== 'closed') {
+              return { ...s, status: 'closed', closed_at: new Date().toLocaleString('zh-CN') };
+            }
+            return s;
+          });
+          
+          addLog('批量关闭会话', `关闭了 ${selectedSessions.length} 个会话`);
+          
+          return { ...prev, humanSessions: updatedSessions };
+        });
+
+        setSelectedSessions([]);
+      };
+
+      // 导出CSV
+      const handleExportCSV = () => {
+        const dataToExport = filteredSessions.length > 0 ? filteredSessions : sessions;
+        
+        const csvContent = [
+          ['会话ID', '岗位', '状态', '留言数', '回复数', '创建时间', '最后回复时间', '最新消息'].join(','),
+          ...dataToExport.map(s => [
+            s.id,
+            s.position,
+            s.status === 'pending' ? '待回复' : s.status === 'replied' ? '已回复' : '已关闭',
+            s.messages?.filter(m => m.role === 'user').length || 0,
+            s.messages?.filter(m => m.role === 'hr').length || 0,
+            s.created_at,
+            s.lastMessageTime || '',
+            s.lastMessage || ''
+          ].map(v => `"${v}"`).join(','))
+        ].join('\n');
+
+        const BOM = '\uFEFF';
+        const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `人工会话_${new Date().toISOString().split('T')[0]}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+        
+        addLog('导出人工会话', `导出了 ${dataToExport.length} 条记录`);
+      };
+
+      // 切换会话展开/收起
+      const toggleExpand = (sessionId) => {
+        setExpandedSessions(prev => ({
+          ...prev,
+          [sessionId]: !prev[sessionId]
+        }));
+      };
+
+      // 发送回复
+      const handleReply = (sessionId) => {
+        if (!replyText.trim()) return;
+        
+        const hrReply = {
+          id: Date.now().toString(),
+          role: 'hr',
+          content: replyText,
+          timestamp: new Date().toLocaleString('zh-CN'),
+          hrName: 'HR 同事'
+        };
+
+        updateAppData(prev => {
+          const updatedSessions = prev.humanSessions.map(s => {
+            if (s.id === sessionId) {
+              return {
+                ...s,
+                messages: [...(s.messages || []), hrReply],
+                status: 'replied',
+                replied_at: new Date().toLocaleString('zh-CN'),
+                lastMessage: replyText,
+                lastMessageTime: new Date().toLocaleString('zh-CN')
+              };
+            }
+            return s;
+          });
+          
+          addLog('回复人工会话', `回复了会话 ${sessionId}`);
+          
+          return { ...prev, humanSessions: updatedSessions };
+        });
+
+        setReplyText('');
+      };
+
+      // 关闭会话
+      const handleClose = (sessionId) => {
+        updateAppData(prev => {
+          const updatedSessions = prev.humanSessions.map(s => {
+            if (s.id === sessionId) {
+              return { ...s, status: 'closed', closed_at: new Date().toLocaleString('zh-CN') };
+            }
+            return s;
+          });
+          
+          addLog('关闭人工会话', `关闭了会话 ${sessionId}`);
+          
+          return { ...prev, humanSessions: updatedSessions };
+        });
+
+        if (selectedSession?.id === sessionId) {
+          setSelectedSession(null);
+        }
+      };
+
+      // 状态对应的样式
+      const getStatusStyle = (status) => {
+        switch (status) {
+          case 'pending': return { bg: 'bg-amber-100', text: 'text-amber-700', label: '待回复' };
+          case 'replied': return { bg: 'bg-green-100', text: 'text-green-700', label: '已回复' };
+          case 'closed': return { bg: 'bg-slate-100', text: 'text-slate-600', label: '已关闭' };
+          default: return { bg: 'bg-slate-100', text: 'text-slate-600', label: '未知' };
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-800">💬 人工会话管理</h2>
+              <p className="text-sm text-slate-500">查看并回复候选人的留言</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* 搜索框 */}
+              <input
+                type="text"
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                placeholder="搜索关键词..."
+                className="px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-40"
+              />
+              
+              {/* 岗位筛选 */}
+              <select 
+                value={filterPosition} 
+                onChange={(e) => setFilterPosition(e.target.value)}
+                className="px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">全部岗位</option>
+                {allPositions.map(pos => (
+                  <option key={pos} value={pos}>{pos}</option>
+                ))}
+              </select>
+              
+              {/* 状态筛选 */}
+              <select 
+                value={filterStatus} 
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">全部状态</option>
+                <option value="pending">待回复</option>
+                <option value="replied">已回复</option>
+                <option value="closed">已关闭</option>
+              </select>
+
+              {/* 导出按钮 */}
+              <button 
+                onClick={handleExportCSV}
+                className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 flex items-center gap-1"
+              >
+                <Icon name="download" className="w-4 h-4" />
+                导出CSV
+              </button>
+            </div>
+          </div>
+
+          {/* 批量操作栏 */}
+          {selectedSessions.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+              <span className="text-sm text-blue-700">
+                已选择 {selectedSessions.length} 个会话
+              </span>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={handleBatchClose}
+                  className="px-4 py-1.5 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600"
+                >
+                  批量关闭
+                </button>
+                <button 
+                  onClick={() => setSelectedSessions([])}
+                  className="px-4 py-1.5 border border-slate-300 rounded-lg text-sm hover:bg-slate-100"
+                >
+                  取消选择
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 统计卡片 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white rounded-xl p-4 border shadow-sm">
+              <p className="text-sm text-slate-500">总会话数</p>
+              <p className="text-2xl font-bold text-slate-800">{sessions.length}</p>
+            </div>
+            <div className="bg-white rounded-xl p-4 border shadow-sm">
+              <p className="text-sm text-slate-500">待回复</p>
+              <p className="text-2xl font-bold text-amber-600">{sessions.filter(s => s.status === 'pending').length}</p>
+            </div>
+            <div className="bg-white rounded-xl p-4 border shadow-sm">
+              <p className="text-sm text-slate-500">已回复</p>
+              <p className="text-2xl font-bold text-green-600">{sessions.filter(s => s.status === 'replied').length}</p>
+            </div>
+            <div className="bg-white rounded-xl p-4 border shadow-sm">
+              <p className="text-sm text-slate-500">已关闭</p>
+              <p className="text-2xl font-bold text-slate-400">{sessions.filter(s => s.status === 'closed').length}</p>
+            </div>
+          </div>
+
+          {/* 会话列表 */}
+          <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+            {filteredSessions.length === 0 ? (
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
+                  <Icon name="message" className="w-8 h-8 text-slate-400" />
+                </div>
+                <p className="text-slate-500">暂无人工会话</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {/* 表头 */}
+                <div className="bg-slate-50 px-4 py-2 flex items-center gap-3 text-sm font-medium text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={selectedSessions.length > 0 && selectedSessions.length === filteredSessions.length}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded border-slate-300"
+                  />
+                  <span className="flex-1">会话信息</span>
+                  <span className="w-24 text-center">状态</span>
+                  <span className="w-32 text-center">消息数</span>
+                  <span className="w-24 text-center">操作</span>
+                </div>
+                
+                {filteredSessions.map(session => {
+                  const statusStyle = getStatusStyle(session.status);
+                  const isExpanded = expandedSessions[session.id];
+                  const userMessages = session.messages?.filter(m => m.role === 'user') || [];
+                  const hrReplies = session.messages?.filter(m => m.role === 'hr') || [];
+
+                  return (
+                    <div key={session.id} className="p-4 hover:bg-slate-50 transition-colors">
+                      {/* 会话头部 */}
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-3 flex-1">
+                          {/* 复选框 */}
+                          <input
+                            type="checkbox"
+                            checked={selectedSessions.includes(session.id)}
+                            onChange={() => toggleSelectSession(session.id)}
+                            className="w-4 h-4 mt-1 rounded border-slate-300"
+                          />
+                          
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium text-slate-800">{session.position}</span>
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
+                                {statusStyle.label}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-400 font-mono">{session.id}</p>
+                            <p className="text-xs text-slate-400 mt-1">
+                              创建于 {session.created_at}
+                              {session.replied_at && <span> · 回复于 {session.replied_at}</span>}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        {/* 消息数 */}
+                        <div className="w-32 text-center">
+                          <p className="text-sm text-slate-600">{userMessages.length} 条留言</p>
+                          <p className="text-xs text-slate-400">{hrReplies.length} 条回复</p>
+                        </div>
+                        
+                        {/* 操作按钮 */}
+                        <div className="flex items-center gap-2 w-24 justify-end">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-slate-800">{session.position}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
+                              {statusStyle.label}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400 font-mono">{session.id}</p>
+                          <p className="text-sm text-slate-500 mt-1">
+                            {userMessages.length} 条留言 / {hrReplies.length} 条回复
+                          </p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            创建于 {session.created_at}
+                            {session.replied_at && <span> · 回复于 {session.replied_at}</span>}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => toggleExpand(session.id)}
+                            className="px-3 py-1 text-sm border rounded-lg hover:bg-slate-100 transition-colors"
+                          >
+                            {isExpanded ? '收起' : '查看详情'}
+                          </button>
+                          {session.status !== 'closed' && (
+                            <button 
+                              onClick={() => handleClose(session.id)}
+                              className="px-3 py-1 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                            >
+                              关闭会话
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 展开的会话详情 */}
+                      {isExpanded && (
+                        <div className="mt-4 p-4 bg-slate-50 rounded-lg">
+                          <div className="space-y-3 max-h-64 overflow-y-auto">
+                            {/* 用户留言 */}
+                            {userMessages.map((msg, idx) => (
+                              <div key={msg.id || idx} className="flex gap-3">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                  <Icon name="user" className="w-4 h-4 text-blue-600" />
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-sm font-medium text-slate-700">候选人</span>
+                                    <span className="text-xs text-slate-400">{msg.timestamp}</span>
+                                  </div>
+                                  <div className="bg-white rounded-lg rounded-tl-sm px-3 py-2 border">
+                                    <p className="text-sm text-slate-600 whitespace-pre-wrap">{msg.content}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* HR 回复 */}
+                            {hrReplies.map((msg, idx) => (
+                              <div key={msg.id || idx} className="flex gap-3">
+                                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                                  <Icon name="user" className="w-4 h-4 text-green-600" />
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-sm font-medium text-green-700">HR 同事</span>
+                                    <span className="text-xs text-slate-400">{msg.timestamp}</span>
+                                  </div>
+                                  <div className="bg-green-50 rounded-lg rounded-tl-sm px-3 py-2 border border-green-200">
+                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* 回复输入框 */}
+                          {session.status !== 'closed' && (
+                            <div className="mt-4 flex gap-2">
+                              <textarea
+                                value={selectedSession?.id === session.id ? replyText : ''}
+                                onChange={(e) => {
+                                  setSelectedSession(session);
+                                  setReplyText(e.target.value);
+                                }}
+                                placeholder="输入回复内容..."
+                                className="flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                                rows={2}
+                              />
+                              <button 
+                                onClick={() => handleReply(session.id)}
+                                disabled={!replyText.trim() || selectedSession?.id !== session.id}
+                                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              >
+                                发送回复
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     function ReviewQueuePanel({ appData, updateAppData, addLog, setAdminSection }) {
       const [selectedIds, setSelectedIds] = useState([]);
       const [showAddModal, setShowAddModal] = useState(null);
@@ -1671,12 +2629,27 @@
       };
 
       const handleAddToKnowledge = (item) => {
+        // 生成KB格式的新ID
+        const existingIds = appData.knowledgeBase.map(kb => parseInt(kb.id.replace('KB-', '')) || 0);
+        const maxId = existingIds.length > 0 ? Math.max(...existingIds) : 0;
+        const newKbId = 'KB-' + String(maxId + 1).padStart(3, '0');
+        
+        // 创建知识库条目，保留审核队列的问题作为问题变体
+        const newKbItem = {
+          id: newKbId,
+          category: item.category || '未分类',
+          applicable_positions: item.applicable_positions || ['all'],
+          question_variants: item.question_variants || [item.question],
+          standard_answer: item.standard_answer || '',
+          sensitivity_level: item.sensitivity_level || 'low'
+        };
+        
         updateAppData(prev => ({ 
           ...prev, 
-          knowledgeBase: [...prev.knowledgeBase, item], 
-          reviewQueue: prev.reviewQueue.filter(r => r.id !== showAddModal.id) 
+          knowledgeBase: [...prev.knowledgeBase, newKbItem], 
+          reviewQueue: prev.reviewQueue.filter(r => r.id !== item.id) 
         }));
-        addLog('添加到知识库', `从审核队列添加了 ${item.id}`);
+        addLog('添加到知识库', `从审核队列添加了 ${newKbId}`);
         setShowAddModal(null);
         if (setAdminSection) setAdminSection('knowledge');
       };
@@ -1974,7 +2947,7 @@
           {/* 通知渠道 */}
           <div className="bg-white rounded-xl shadow-sm border p-6">
             <h3 className="font-medium text-slate-800 mb-4">通知渠道</h3>
-            <p className="text-sm text-slate-500 mb-4">选择需要推送通知的办公软件（可多选）</p>
+            <p className="text-sm text-slate-500 mb-4">选择需要推送通知的办公软件，选中后填写对应 Webhook 地址即可接收真实通知（可多选）</p>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {NOTIFICATION_CHANNELS.map(channel => (
                 <div
@@ -2016,10 +2989,55 @@
               ))}
             </div>
             
+            {/* 企业微信 Webhook 配置 */}
+            {config.channels.includes('wechat') && (
+              <div className="mt-4 pt-4 border-t" onClick={e => e.stopPropagation()}>
+                <label className="block text-sm font-medium text-slate-700 mb-2">企业微信机器人 Webhook URL</label>
+                <input
+                  type="url"
+                  value={config.wechatWebhookUrl || ''}
+                  onChange={(e) => setConfig(prev => ({ ...prev, wechatWebhookUrl: e.target.value }))}
+                  placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
+                  className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">在企业微信群添加机器人，复制其 Webhook 地址填入此处</p>
+              </div>
+            )}
+            
+            {/* 钉钉 Webhook 配置 */}
+            {config.channels.includes('dingtalk') && (
+              <div className="mt-4 pt-4 border-t" onClick={e => e.stopPropagation()}>
+                <label className="block text-sm font-medium text-slate-700 mb-2">钉钉机器人 Webhook URL</label>
+                <input
+                  type="url"
+                  value={config.dingtalkWebhookUrl || ''}
+                  onChange={(e) => setConfig(prev => ({ ...prev, dingtalkWebhookUrl: e.target.value }))}
+                  placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx"
+                  className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">在钉钉群添加自定义机器人，复制其 Webhook 地址填入此处</p>
+              </div>
+            )}
+            
+            {/* 飞书 Webhook 配置 */}
+            {config.channels.includes('feishu') && (
+              <div className="mt-4 pt-4 border-t" onClick={e => e.stopPropagation()}>
+                <label className="block text-sm font-medium text-slate-700 mb-2">飞书机器人 Webhook URL</label>
+                <input
+                  type="url"
+                  value={config.feishuWebhookUrl || ''}
+                  onChange={(e) => setConfig(prev => ({ ...prev, feishuWebhookUrl: e.target.value }))}
+                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+                  className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">在飞书群添加自定义机器人，复制其 Webhook 地址填入此处</p>
+              </div>
+            )}
+            
             {/* Webhook URL 配置 */}
             {config.channels.includes('webhook') && (
-              <div className="mt-4 pt-4 border-t">
-                <label className="block text-sm font-medium text-slate-700 mb-2">Webhook URL</label>
+              <div className="mt-4 pt-4 border-t" onClick={e => e.stopPropagation()}>
+                <label className="block text-sm font-medium text-slate-700 mb-2">自定义 Webhook URL</label>
                 <input
                   type="url"
                   value={config.webhookUrl || ''}
@@ -2027,21 +3045,26 @@
                   placeholder="https://your-webhook-url.com/notify"
                   className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-                <p className="text-xs text-slate-500 mt-1">配置自定义 Webhook 地址，消息将以 JSON 格式 POST 发送</p>
+                <p className="text-xs text-slate-500 mt-1">填写后系统将以 JSON 格式 POST 发送，包含问题、岗位、优先级等完整字段</p>
               </div>
             )}
             
             {/* 邮箱配置 */}
             {config.channels.includes('email') && (
-              <div className="mt-4 pt-4 border-t">
-                <label className="block text-sm font-medium text-slate-700 mb-2">通知邮箱</label>
+              <div className="mt-4 pt-4 border-t" onClick={e => e.stopPropagation()}>
+                <label className="block text-sm font-medium text-slate-700 mb-2">收件 HR 邮箱</label>
                 <input
                   type="email"
-                  value={config.emailAddress || 'hr@company.com'}
+                  value={config.emailAddress || ''}
                   onChange={(e) => setConfig(prev => ({ ...prev, emailAddress: e.target.value }))}
                   placeholder="hr@company.com"
                   className="w-full px-4 py-2.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <div className="bg-blue-50 rounded-lg p-3 mt-3 text-xs text-blue-700">
+                  <p className="font-medium mb-1">📬 如何激活邮件通知</p>
+                  <p>填写邮箱后点「测试通知」，系统将向该邮箱发送第一封邮件。</p>
+                  <p className="mt-1">📌 收件人会收到一封来自 Formsubmit 的<strong>激活确认邮件</strong>，点击其中链接后，后续通知将<strong>自动直达收件箱</strong>，无需任何其他配置。</p>
+                </div>
               </div>
             )}
           </div>
@@ -2089,16 +3112,19 @@
           <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-100">
             <h3 className="font-medium text-slate-800 mb-2 flex items-center gap-2">
               <Icon name="sparkles" className="w-5 h-5 text-blue-600" />
-              通知效果预览
+              管理员收到的通知样式（预览）
             </h3>
-            <div className="bg-white/80 rounded-lg p-4 text-sm space-y-2">
-              <p className="text-slate-600"><strong>标题：</strong>【HR助手】新问题待处理 - 🚨紧急</p>
-              <p className="text-slate-600"><strong>问题：</strong>[用户问题内容]</p>
-              <p className="text-slate-600"><strong>岗位：</strong>技术岗</p>
-              <p className="text-slate-600"><strong>人工必要性：</strong>85分 (紧急)</p>
-              <p className="text-slate-600"><strong>分析：</strong>涉及薪资敏感信息</p>
-              <p className="text-slate-600"><strong>时间：</strong>2026-03-29 14:30:25</p>
+            <div className="bg-white/80 rounded-lg p-4 text-sm space-y-1.5 font-mono text-slate-700">
+              <p>【HR智能助手】新问题需处理 - 🚨 紧急</p>
+              <p className="text-slate-400">──────────────────</p>
+              <p>❓ 问题：[用户提问内容]</p>
+              <p>📂 应聘岗位：技术岗</p>
+              <p>📊 紧急程度：85分（紧急）</p>
+              <p>🔍 分析：知识库无匹配，需人工解答</p>
+              <p>⏰ 时间：2026-03-29 14:30:25</p>
+              <p>🔗 处理链接：[当前页面地址]</p>
             </div>
+            <p className="text-xs text-slate-500 mt-3">候选人端仅收到简洁提示：「您的问题已由 HR 专员接手，请稍候」—— 详细分析信息仅向管理员推送</p>
           </div>
 
           {/* 测试结果 */}
@@ -2113,9 +3139,9 @@
                 </span>
               </div>
               {showTestResult.results && (
-                <div className="text-sm text-slate-600 ml-7">
+                <div className="text-sm text-slate-600 ml-7 space-y-1">
                   {showTestResult.results.map((r, i) => (
-                    <p key={i}>• {r.channel}: {r.status === 'success' ? '✓ 成功' : '✗ ' + r.message}</p>
+                    <p key={i}>{r.status === 'success' ? '✅' : r.status === 'warn' ? '⚠️' : '❌'} <strong>{r.channel}</strong>：{r.message}</p>
                   ))}
                 </div>
               )}
@@ -2129,13 +3155,14 @@
     }
 
     function SettingsPanel({ appData, updateAppData, addLog }) {
-      const [settings, setSettings] = useState({ confidenceThreshold: 70, autoHandoff: true });
+      // 从 appData 中读取设置，若无则使用默认值
+      const [settings, setSettings] = useState(() => appData.settings || { confidenceThreshold: 70, autoHandoff: true });
 
       const exportData = (type) => {
         let headers, rows, filename;
         if (type === 'conversations') {
-          headers = ['时间', 'AI解决', '置信度', '类别'];
-          rows = appData.conversations.map(c => [c.time, c.aiResolved ? '是' : '否', c.confidence + '%', c.category]);
+          headers = ['时间', 'AI解决', '置信度', '类别', '满意度'];
+          rows = appData.conversations.map(c => [c.time, c.aiResolved ? '是' : '否', c.confidence + '%', c.category, c.satisfaction || '未评价']);
           filename = '对话记录';
         } else if (type === 'knowledge') {
           headers = ['ID', '分类', '问题', '敏感级别'];
@@ -2174,7 +3201,11 @@
                 <label className="text-sm font-medium text-slate-700">置信度阈值</label>
                 <span className="text-sm text-blue-600 font-medium">{settings.confidenceThreshold}%</span>
               </div>
-              <input type="range" min="50" max="95" value={settings.confidenceThreshold} onChange={(e) => setSettings({ ...settings, confidenceThreshold: Number(e.target.value) })} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-500" />
+              <input type="range" min="50" max="95" value={settings.confidenceThreshold} onChange={(e) => {
+                const newSettings = { ...settings, confidenceThreshold: Number(e.target.value) };
+                setSettings(newSettings);
+                updateAppData(prev => ({ ...prev, settings: newSettings }));
+              }} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-500" />
               <p className="text-xs text-slate-500 mt-1">低于此阈值的问题将进入审核队列</p>
             </div>
 
@@ -2213,52 +3244,113 @@
       const chartRef = useRef(null);
       const chartInstance = useRef(null);
 
-      const dailyMetrics = generateDailyMetrics();
+      const conversations = appData.conversations || [];
       const days = timeRange === '7d' ? 7 : timeRange === '14d' ? 14 : 30;
-      const recentMetrics = dailyMetrics.slice(-days);
 
-      const avgAiRate = recentMetrics.length > 0 ? (recentMetrics.reduce((sum, d) => sum + d.ai_resolution_rate, 0) / recentMetrics.length).toFixed(1) : 0;
-      const avgResponseTime = recentMetrics.length > 0 ? Math.floor(recentMetrics.reduce((sum, d) => sum + d.avg_response_time, 0) / recentMetrics.length) : 0;
-      const avgSatisfaction = appData.stats.satisfactionCount > 0 ? (appData.stats.totalSatisfaction / appData.stats.satisfactionCount).toFixed(1) : '4.5';
-      const totalConversations = appData.stats.totalConversations || recentMetrics.reduce((sum, d) => sum + d.total_conversations, 0);
+      // 计算近N天每日指标（从真实对话数据）
+      const getDailyMetrics = () => {
+        const today = new Date();
+        const metricsMap = {};
+        for (let i = days - 1; i >= 0; i--) {
+          const d = new Date(today);
+          d.setDate(d.getDate() - i);
+          // 统一使用 yyyy-MM-dd 格式作为 key
+          const key = d.toISOString().split('T')[0];
+          metricsMap[key] = { date: key, total_conversations: 0, ai_resolved: 0, satisfaction_score: 0, satisfaction_count: 0 };
+        }
+        conversations.forEach(conv => {
+          // 解析 toLocaleString 格式的时间（如 "2026/3/29 14:30:25"）
+          // 转换为标准格式进行匹配
+          if (conv.time) {
+            const parts = conv.time.split(' ')[0].split('/');
+            if (parts.length === 3) {
+              const [year, month, day] = parts;
+              // 转换为 yyyy-MM-dd 格式
+              const key = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+              if (metricsMap[key]) {
+                metricsMap[key].total_conversations++;
+                if (conv.aiResolved) metricsMap[key].ai_resolved++;
+                if (conv.satisfaction) {
+                  metricsMap[key].satisfaction_score += conv.satisfaction === '满意' ? 5 : conv.satisfaction === '一般' ? 3 : 1;
+                  metricsMap[key].satisfaction_count++;
+                }
+              }
+            }
+          }
+        });
+        return Object.values(metricsMap).map(m => ({
+          ...m,
+          ai_resolution_rate: m.total_conversations > 0 ? parseFloat((m.ai_resolved / m.total_conversations * 100).toFixed(1)) : 0,
+          satisfaction_score: m.satisfaction_count > 0 ? parseFloat((m.satisfaction_score / m.satisfaction_count).toFixed(2)) : 0
+        }));
+      };
+
+      const recentMetrics = getDailyMetrics();
+      const hasData = conversations.length > 0;
+
+      // KPI 计算
+      const avgAiRate = appData.stats.totalConversations > 0
+        ? parseFloat((appData.stats.aiResolved / appData.stats.totalConversations * 100).toFixed(1))
+        : 0;
+      const avgSatisfaction = appData.stats.satisfactionCount > 0
+        ? (appData.stats.totalSatisfaction / appData.stats.satisfactionCount).toFixed(1)
+        : '—';
+      const hrSavedTime = (appData.stats.aiResolved * 5) + (appData.stats.humanHandled * 2);
+      // 人均答疑时间 = 实际员工答疑总时长 / 答疑人数（分钟）
+      const avgAnswerTime = appData.stats.humanHandled > 0
+        ? parseFloat((appData.stats.totalHumanAnswerTime / appData.stats.humanHandled).toFixed(1))
+        : 0;
+
+      // 问题类型分布（从真实数据计算）
+      const categoryMap = {};
+      conversations.forEach(conv => {
+        const cat = conv.category || '未分类';
+        categoryMap[cat] = (categoryMap[cat] || 0) + 1;
+      });
+      const typeData = Object.entries(categoryMap)
+        .map(([type, count]) => ({ type, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6);
+      const typeTotal = typeData.reduce((sum, d) => sum + d.count, 0);
 
       useEffect(() => {
         if (chartInstance.current) {
           chartInstance.current.destroy();
+          chartInstance.current = null;
         }
+        if (!chartRef.current) return;
 
-        const ctx = chartRef.current?.getContext('2d');
-        if (ctx) {
-          chartInstance.current = new Chart(ctx, {
-            type: 'line',
-            data: {
-              labels: recentMetrics.map(d => d.date.slice(5)),
-              datasets: [
-                { label: 'AI解决率', data: recentMetrics.map(d => d.ai_resolution_rate), borderColor: '#0052D9', backgroundColor: 'rgba(0,82,217,0.1)', fill: true, tension: 0.4 },
-                { label: '满意度', data: recentMetrics.map(d => d.satisfaction_score * 20), borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.1)', fill: true, tension: 0.4 }
-              ]
-            },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: false, min: 50, max: 100 } } }
-          });
-        }
+        const ctx = chartRef.current.getContext('2d');
+        if (!ctx) return;
 
-        return () => {
-          if (chartInstance.current) chartInstance.current.destroy();
-        };
-      }, [timeRange]);
+        const labels = recentMetrics.map(d => d.date.slice(5));
+        const aiRateData = recentMetrics.map(d => d.ai_resolution_rate);
+        const satData = recentMetrics.map(d => d.satisfaction_score * 20);
 
-      const typeData = [
-        { type: '面试流程', count: 156 }, { type: '薪资福利', count: 124 }, { type: '入职准备', count: 98 },
-        { type: '岗位信息', count: 87 }, { type: '公司文化', count: 45 }, { type: '职业发展', count: 37 }
-      ];
-      const total = typeData.reduce((sum, d) => sum + d.count, 0);
+        chartInstance.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: 'AI解决率(%)', data: aiRateData, borderColor: '#0052D9', backgroundColor: 'rgba(0,82,217,0.1)', fill: true, tension: 0.4 },
+              { label: '满意度(×20)', data: satData, borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.1)', fill: true, tension: 0.4 }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: { y: { beginAtZero: true, max: 100 } }
+          }
+        });
+      }, [timeRange, appData.conversations]);
 
       return (
         <div className="space-y-6">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
               <h2 className="text-lg font-semibold text-slate-800">效果看板</h2>
-              <p className="text-sm text-slate-500">实时监控 AI 助手运行状态</p>
+              <p className="text-sm text-slate-500">{hasData ? `共 ${conversations.length} 条对话记录` : '暂无对话数据，开始对话后数据将自动更新'}</p>
             </div>
             <div className="flex items-center gap-2 bg-white rounded-lg p-1 border">
               {[{ id: '7d', label: '近7天' }, { id: '14d', label: '近14天' }, { id: '30d', label: '近30天' }].map(range => (
@@ -2271,9 +3363,9 @@
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'AI解决率', value: avgAiRate + '%', target: '80%', icon: 'bot', color: 'blue' },
-              { label: '平均响应时长', value: avgResponseTime + '秒', target: '≤30秒', icon: 'activity', color: 'green' },
-              { label: '总对话数', value: totalConversations, target: '累计', icon: 'message', color: 'amber' },
+              { label: 'AI解决率', value: avgAiRate > 0 ? avgAiRate + '%' : '—', target: '80%', icon: 'bot', color: 'blue' },
+              { label: '人均答疑时间', value: hasData ? `${avgAnswerTime}分钟` : '—', target: '≤3分钟', icon: 'activity', color: 'green' },
+              { label: '总对话数', value: appData.stats.totalConversations || 0, target: '累计', icon: 'message', color: 'amber' },
               { label: '候选人满意度', value: avgSatisfaction, target: '≥4.2分', icon: 'star', color: 'rose' }
             ].map((kpi, idx) => (
               <div key={idx} className="bg-white rounded-xl shadow-sm border p-4">
@@ -2292,27 +3384,41 @@
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-white rounded-xl shadow-sm border p-4">
               <h3 className="font-semibold text-slate-800 mb-4">AI解决率 & 满意度趋势</h3>
-              <div className="h-64"><canvas ref={chartRef}></canvas></div>
+              {hasData ? (
+                <div className="h-64"><canvas ref={chartRef}></canvas></div>
+              ) : (
+                <div className="h-64 flex flex-col items-center justify-center text-slate-400">
+                  <Icon name="chart" className="w-12 h-12 mb-2 opacity-30" />
+                  <p className="text-sm">暂无数据，开始对话后自动生成</p>
+                </div>
+              )}
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border p-4">
               <h3 className="font-semibold text-slate-800 mb-4">问题类型分布</h3>
-              <div className="space-y-3">
-                {typeData.map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: ['#0052D9', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#06B6D4'][idx] }}></div>
-                      <span className="text-sm text-slate-700">{item.type}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="w-32 h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: (item.count / total * 100) + '%', backgroundColor: ['#0052D9', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#06B6D4'][idx] }}></div>
+              {typeData.length > 0 ? (
+                <div className="space-y-3">
+                  {typeData.map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: ['#0052D9', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#06B6D4'][idx] }}></div>
+                        <span className="text-sm text-slate-700">{item.type}</span>
                       </div>
-                      <span className="text-sm font-medium text-slate-800 w-12 text-right">{item.count}</span>
+                      <div className="flex items-center gap-3">
+                        <div className="w-32 h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: (item.count / typeTotal * 100) + '%', backgroundColor: ['#0052D9', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#06B6D4'][idx] }}></div>
+                        </div>
+                        <span className="text-sm font-medium text-slate-800 w-12 text-right">{item.count}</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-48 flex flex-col items-center justify-center text-slate-400">
+                  <Icon name="database" className="w-10 h-10 mb-2 opacity-30" />
+                  <p className="text-sm">暂无数据</p>
+                </div>
+              )}
             </div>
           </div>
 
