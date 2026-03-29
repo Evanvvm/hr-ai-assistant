@@ -1065,14 +1065,6 @@
       const handleTransferToHuman = () => {
         const sessionId = 'HS-' + Date.now();
         
-        const humanMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: '好的，已为您接通 HR 专员 👋\n\n请稍候，我们的 HR 同事将尽快与您沟通。\n\n💬 您可以继续留言，HR 同事会在这里回复您。',
-          timestamp: new Date(),
-          metadata: { confidence: 100, category: '转人工', needs_human: true, humanNecessityScore: 100, humanNecessityLevel: 'urgent' }
-        };
-        
         // 构建转人工的审核队列条目
         const reviewItem = {
           id: 'RQ-' + Date.now(),
@@ -1091,8 +1083,6 @@
             urgent: false
           }
         };
-        
-        setMessages(prev => [...prev, humanMessage]);
         
         // 创建人工会话记录
         const humanConversation = {
@@ -1167,8 +1157,11 @@
         let bestMatch = null;
         let bestScore = 0;
         let matchedWords = []; // 记录匹配的关键词
-
-        for (const item of knowledgeBase) {
+        
+        // 使用 appData 中的知识库（支持后台新增/编辑）
+        const activeKnowledgeBase = appData.knowledgeBase || knowledgeBase;
+        
+        for (const item of activeKnowledgeBase) {
           if (item.applicable_positions[0] !== 'all' && !item.applicable_positions.includes(selectedPosition)) continue;
 
           for (const variant of item.question_variants) {
@@ -1284,20 +1277,10 @@
           const userMessage = { id: Date.now().toString(), role: 'user', content: inputValue, timestamp: new Date() };
           setMessages(prev => [...prev, userMessage]);
           setInputValue('');
-          setTimeout(() => {
-            const humanMessage = {
-              id: (Date.now() + 1).toString(),
-              role: 'assistant',
-              content: '好的，已为您接通 HR 专员 👋\n\n请稍候，我们的 HR 同事将尽快与您沟通。',
-              timestamp: new Date(),
-              metadata: { confidence: 100, category: '转人工', needs_human: true, humanNecessityScore: 100, humanNecessityLevel: 'urgent' }
-            };
-            setMessages(prev => [...prev, humanMessage]);
-            updateAppData(prev => ({
-              ...prev,
-              stats: { ...prev.stats, humanHandled: prev.stats.humanHandled + 1 }
-            }));
-          }, 500);
+          updateAppData(prev => ({
+            ...prev,
+            stats: { ...prev.stats, humanHandled: prev.stats.humanHandled + 1 }
+          }));
           return;
         }
 
@@ -1545,31 +1528,56 @@
                 {/* 人工模式消息区域 */}
                 {isHumanMode && (
                   <>
-                    {/* HR的回复 */}
-                    {currentSession?.messages?.filter(m => m.role === 'hr').map((msg, idx) => (
-                      <div key={msg.id || idx} className="flex gap-3 animate-slide-up">
-                        <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-                          <Icon name="user" className="w-4 h-4 text-green-600" />
-                        </div>
-                        <div className="bg-green-50 rounded-2xl rounded-tl-sm px-4 py-3 border border-green-200 max-w-[80%]">
-                          <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
-                          <p className="text-xs text-slate-400 mt-1">{msg.timestamp}</p>
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {/* 候选人的留言 */}
-                    {humanMessages.map((msg, idx) => (
-                      <div key={msg.id || idx} className="flex gap-3 animate-slide-up flex-row-reverse">
-                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                          <Icon name="user" className="w-4 h-4 text-blue-600" />
-                        </div>
-                        <div className="bg-blue-500 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[80%]">
-                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                          <p className="text-xs text-blue-200 mt-1">{msg.timestamp}</p>
-                        </div>
-                      </div>
-                    ))}
+                    {/* 问题-答案交替显示 */}
+                    {(() => {
+                      // 合并所有消息并按时间排序
+                      const allMessages = [];
+                      
+                      // 添加 HR 的回复
+                      currentSession?.messages?.filter(m => m.role === 'hr').forEach(msg => {
+                        allMessages.push({ ...msg, type: 'hr' });
+                      });
+                      
+                      // 添加候选人的留言
+                      humanMessages.forEach(msg => {
+                        allMessages.push({ ...msg, type: 'user' });
+                      });
+                      
+                      // 按时间排序
+                      allMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                      
+                      if (allMessages.length === 0) return null;
+                      
+                      return allMessages.map((msg, idx) => {
+                        if (msg.type === 'hr') {
+                          // HR 回复（绿色气泡，右侧）
+                          return (
+                            <div key={msg.id || `hr-${idx}`} className="flex gap-3 animate-slide-up">
+                              <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                                <Icon name="user" className="w-4 h-4 text-green-600" />
+                              </div>
+                              <div className="bg-green-50 rounded-2xl rounded-tl-sm px-4 py-3 border border-green-200 max-w-[80%]">
+                                <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
+                                <p className="text-xs text-slate-400 mt-1">{msg.timestamp}</p>
+                              </div>
+                            </div>
+                          );
+                        } else {
+                          // 候选人留言（蓝色气泡，左侧）
+                          return (
+                            <div key={msg.id || `user-${idx}`} className="flex gap-3 animate-slide-up flex-row-reverse">
+                              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                <Icon name="user" className="w-4 h-4 text-blue-600" />
+                              </div>
+                              <div className="bg-blue-500 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[80%]">
+                                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                                <p className="text-xs text-blue-200 mt-1">{msg.timestamp}</p>
+                              </div>
+                            </div>
+                          );
+                        }
+                      });
+                    })()}
                     
                     {/* 无消息提示 */}
                     {(!currentSession?.messages?.filter(m => m.role === 'hr').length && !humanMessages.length) && (
@@ -2500,41 +2508,58 @@
                       {isExpanded && (
                         <div className="mt-4 p-4 bg-slate-50 rounded-lg">
                           <div className="space-y-3 max-h-64 overflow-y-auto">
-                            {/* 用户留言 */}
-                            {userMessages.map((msg, idx) => (
-                              <div key={msg.id || idx} className="flex gap-3">
-                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                                  <Icon name="user" className="w-4 h-4 text-blue-600" />
-                                </div>
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <span className="text-sm font-medium text-slate-700">候选人</span>
-                                    <span className="text-xs text-slate-400">{msg.timestamp}</span>
-                                  </div>
-                                  <div className="bg-white rounded-lg rounded-tl-sm px-3 py-2 border">
-                                    <p className="text-sm text-slate-600 whitespace-pre-wrap">{msg.content}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-
-                            {/* HR 回复 */}
-                            {hrReplies.map((msg, idx) => (
-                              <div key={msg.id || idx} className="flex gap-3">
-                                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-                                  <Icon name="user" className="w-4 h-4 text-green-600" />
-                                </div>
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <span className="text-sm font-medium text-green-700">HR 同事</span>
-                                    <span className="text-xs text-slate-400">{msg.timestamp}</span>
-                                  </div>
-                                  <div className="bg-green-50 rounded-lg rounded-tl-sm px-3 py-2 border border-green-200">
-                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
+                            {/* 问题-答案交替显示 */}
+                            {(() => {
+                              // 将所有消息按时间排序，然后交替显示
+                              const allMessages = [...(session.messages || [])].sort((a, b) => 
+                                new Date(a.timestamp) - new Date(b.timestamp)
+                              );
+                              let qIndex = 0;
+                              let aIndex = 0;
+                              const items = [];
+                              
+                              for (let i = 0; i < allMessages.length; i++) {
+                                const msg = allMessages[i];
+                                if (msg.role === 'user') {
+                                  items.push(
+                                    <div key={msg.id || `q-${qIndex}`} className="flex gap-3">
+                                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                        <Icon name="user" className="w-4 h-4 text-blue-600" />
+                                      </div>
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <span className="text-sm font-medium text-slate-700">候选人</span>
+                                          <span className="text-xs text-slate-400">{msg.timestamp}</span>
+                                        </div>
+                                        <div className="bg-white rounded-lg rounded-tl-sm px-3 py-2 border">
+                                          <p className="text-sm text-slate-600 whitespace-pre-wrap">{msg.content}</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                  qIndex++;
+                                } else {
+                                  items.push(
+                                    <div key={msg.id || `a-${aIndex}`} className="flex gap-3">
+                                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                                        <Icon name="user" className="w-4 h-4 text-green-600" />
+                                      </div>
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <span className="text-sm font-medium text-green-700">HR 同事</span>
+                                          <span className="text-xs text-slate-400">{msg.timestamp}</span>
+                                        </div>
+                                        <div className="bg-green-50 rounded-lg rounded-tl-sm px-3 py-2 border border-green-200">
+                                          <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                  aIndex++;
+                                }
+                              }
+                              return items;
+                            })()}
                           </div>
 
                           {/* 回复输入框 */}
