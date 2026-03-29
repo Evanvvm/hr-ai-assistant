@@ -1050,16 +1050,42 @@
         // 注意：不监听 currentSessionId 变化，避免干扰用户主动进入人工模式的操作
       }, []);
 
-      // 当 HR 回复时，更新本地消息显示
+      // 上一次 HR 回复时间戳（用于检测新回复）
+      const [lastHRReplyTimestamp, setLastHRReplyTimestamp] = useState(null);
+      
+      // 当 HR 回复时，更新本地消息显示并发送浏览器通知
       useEffect(() => {
         if (isHumanMode && currentSessionId) {
           const session = appData.humanSessions?.find(s => s.id === currentSessionId);
           if (session) {
             const userMsgs = session.messages?.filter(m => m.role === 'user') || [];
+            const hrReplies = session.messages?.filter(m => m.role === 'hr') || [];
             setHumanMessages(userMsgs);
+            
+            // 如果有 HR 新回复，发送浏览器通知
+            if (hrReplies.length > 0) {
+              const latestReply = hrReplies[hrReplies.length - 1];
+              // 检查是否是新回复（通过时间戳判断）
+              if (latestReply.timestamp && latestReply.timestamp !== lastHRReplyTimestamp) {
+                setLastHRReplyTimestamp(latestReply.timestamp);
+                if (Notification.permission === 'granted') {
+                  new Notification('💬 HR 已回复您的留言', {
+                    body: latestReply.content.substring(0, 50) + (latestReply.content.length > 50 ? '...' : ''),
+                    icon: '📨'
+                  });
+                }
+              }
+            }
           }
         }
       }, [appData.humanSessions]);
+      
+      // 请求浏览器通知权限（候选人端）
+      const requestNotificationPermission = () => {
+        if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      };
 
       // 转人工处理
       const handleTransferToHuman = () => {
@@ -1528,6 +1554,22 @@
                 {/* 人工模式消息区域 */}
                 {isHumanMode && (
                   <>
+                    {/* 浏览器通知权限提示 */}
+                    {'Notification' in window && Notification.permission === 'default' && (
+                      <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">🔔</span>
+                          <span className="text-sm text-blue-700">开启消息提醒，HR回复时立即通知您</span>
+                        </div>
+                        <button
+                          onClick={requestNotificationPermission}
+                          className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
+                        >
+                          开启提醒
+                        </button>
+                      </div>
+                    )}
+                    
                     {/* 问题-答案交替显示 */}
                     {(() => {
                       // 合并所有消息并按时间排序
@@ -2256,6 +2298,10 @@
           hrName: 'HR 同事'
         };
 
+        // 获取会话信息用于通知
+        const session = appData.humanSessions?.find(s => s.id === sessionId);
+        const sessionPosition = session?.position || '未选择岗位';
+
         updateAppData(prev => {
           const updatedSessions = prev.humanSessions.map(s => {
             if (s.id === sessionId) {
@@ -2275,6 +2321,18 @@
           
           return { ...prev, humanSessions: updatedSessions };
         });
+
+        // 发送 HR 回复通知
+        const notifyConfig = loadNotificationConfig();
+        if (notifyConfig.enabled && notifyConfig.channels.length > 0) {
+          sendNotification({
+            title: '💬 HR 已回复候选人留言',
+            content: `【${sessionPosition}】的候选人在人工会话中收到了 HR 的回复，请确认是否需要再次沟通。`,
+            type: 'info',
+            channels: notifyConfig.channels,
+            config: notifyConfig
+          });
+        }
 
         setReplyText('');
       };
