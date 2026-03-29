@@ -1283,6 +1283,10 @@
           setHumanMessages(prev => [...prev, userMessage]);
           setInputValue('');
           
+          // 获取会话信息用于通知
+          const session = appData.humanSessions?.find(s => s.id === currentSessionId);
+          const sessionPosition = session?.position || selectedPosition || '未选择岗位';
+          
           // 保存到全局人工会话
           updateAppData(prev => {
             const sessions = prev.humanSessions || [];
@@ -1294,6 +1298,18 @@
             }
             return { ...prev, humanSessions: [...sessions] };
           });
+          
+          // 发送 HR 通知（有新留言）
+          const notifyConfig = loadNotificationConfig();
+          if (notifyConfig.enabled && notifyConfig.channels.length > 0) {
+            sendNotification({
+              title: '📩 候选人新留言',
+              content: `【${sessionPosition}】的候选人在人工会话中发送了新消息：${inputValue.substring(0, 30)}${inputValue.length > 30 ? '...' : ''}`,
+              type: 'high',
+              channels: notifyConfig.channels,
+              config: notifyConfig
+            });
+          }
           
           return;
         }
@@ -1555,18 +1571,34 @@
                 {isHumanMode && (
                   <>
                     {/* 浏览器通知权限提示 */}
-                    {'Notification' in window && Notification.permission === 'default' && (
+                    {typeof Notification !== 'undefined' && (
                       <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="text-lg">🔔</span>
-                          <span className="text-sm text-blue-700">开启消息提醒，HR回复时立即通知您</span>
+                          {Notification.permission === 'default' && (
+                            <span className="text-sm text-blue-700">开启消息提醒，HR回复时立即通知您</span>
+                          )}
+                          {Notification.permission === 'granted' && (
+                            <span className="text-sm text-green-700">✅ 消息提醒已开启</span>
+                          )}
+                          {Notification.permission === 'denied' && (
+                            <span className="text-sm text-red-600">通知已被浏览器阻止，请在设置中允许通知</span>
+                          )}
                         </div>
-                        <button
-                          onClick={requestNotificationPermission}
-                          className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
-                        >
-                          开启提醒
-                        </button>
+                        {Notification.permission === 'default' && (
+                          <button
+                            onClick={() => {
+                              Notification.requestPermission().then(perm => {
+                                if (perm === 'granted') {
+                                  alert('已开启消息提醒！');
+                                }
+                              });
+                            }}
+                            className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 transition-colors"
+                          >
+                            开启提醒
+                          </button>
+                        )}
                       </div>
                     )}
                     
