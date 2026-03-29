@@ -69,6 +69,25 @@
         return [];
       }
     };
+    
+    // 统一时间戳格式化函数（用于显示友好时间）
+    const formatTimestamp = (ts) => {
+      if (!ts) return '';
+      // 如果是 ISO 格式，转换为本地时间显示
+      if (typeof ts === 'string' && ts.includes('T')) {
+        const date = new Date(ts);
+        return date.toLocaleString('zh-CN', {
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        });
+      }
+      // 否则直接返回原始值
+      return ts;
+    };
 
     // ==================== 数据层 ====================
     const knowledgeBase = [
@@ -1210,13 +1229,13 @@
           }
         };
         
-        // 创建人工会话记录
+        // 创建人工会话记录（统一使用 ISO 格式时间戳）
         const humanConversation = {
           id: sessionId,
           position: selectedPosition || '未选择岗位',
           messages: [],
           status: 'pending',  // pending | replied | closed
-          created_at: new Date().toLocaleString('zh-CN'),
+          created_at: new Date().toISOString(),
           replied_at: null,
           closed_at: null
         };
@@ -1372,11 +1391,13 @@
 
         // 人工模式：发送留言给HR
         if (isHumanMode && currentSessionId) {
+          // 统一使用 ISO 格式时间戳
+          const timestamp = new Date().toISOString();
           const userMessage = { 
             id: Date.now().toString(), 
             role: 'user', 
             content: inputValue, 
-            timestamp: new Date().toLocaleString('zh-CN'),
+            timestamp: timestamp,
             sessionId: currentSessionId,
             position: selectedPosition || '未选择岗位'
           };
@@ -1396,7 +1417,7 @@
             if (sessionIndex !== -1) {
               sessions[sessionIndex].messages = [...(sessions[sessionIndex].messages || []), userMessage];
               sessions[sessionIndex].lastMessage = inputValue;
-              sessions[sessionIndex].lastMessageTime = new Date().toLocaleString('zh-CN');
+              sessions[sessionIndex].lastMessageTime = timestamp;
             }
             return { ...prev, humanSessions: [...sessions] };
           });
@@ -1407,7 +1428,7 @@
             sessionId: currentSessionId,
             position: sessionPosition,
             content: inputValue,
-            timestamp: userMessage.timestamp
+            timestamp: timestamp
           });
           
           // 发送 HR 通知（有新留言）- 根据触发规则判断
@@ -1760,7 +1781,7 @@
                               </div>
                               <div className="bg-green-50 rounded-2xl rounded-tl-sm px-4 py-3 border border-green-200 max-w-[80%]">
                                 <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
-                                <p className="text-xs text-slate-400 mt-1">{msg.timestamp}</p>
+                                <p className="text-xs text-slate-400 mt-1">{formatTimestamp(msg.timestamp)}</p>
                               </div>
                             </div>
                           );
@@ -1773,7 +1794,7 @@
                               </div>
                               <div className="bg-blue-500 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[80%]">
                                 <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                                <p className="text-xs text-blue-200 mt-1">{msg.timestamp}</p>
+                                <p className="text-xs text-blue-200 mt-1">{formatTimestamp(msg.timestamp)}</p>
                               </div>
                             </div>
                           );
@@ -2507,7 +2528,7 @@
         updateAppData(prev => {
           const updatedSessions = prev.humanSessions.map(s => {
             if (selectedSessions.includes(s.id) && s.status !== 'closed') {
-              return { ...s, status: 'closed', closed_at: new Date().toLocaleString('zh-CN') };
+              return { ...s, status: 'closed', closed_at: new Date().toISOString() };
             }
             return s;
           });
@@ -2562,11 +2583,13 @@
       const handleReply = (sessionId) => {
         if (!replyText.trim()) return;
         
+        // 统一使用 ISO 格式时间戳
+        const timestamp = new Date().toISOString();
         const hrReply = {
           id: Date.now().toString(),
           role: 'hr',
           content: replyText,
-          timestamp: new Date().toLocaleString('zh-CN'),
+          timestamp: timestamp,
           hrName: 'HR 同事'
         };
 
@@ -2581,9 +2604,9 @@
                 ...s,
                 messages: [...(s.messages || []), hrReply],
                 status: 'replied',
-                replied_at: new Date().toLocaleString('zh-CN'),
+                replied_at: timestamp,
                 lastMessage: replyText,
-                lastMessageTime: new Date().toLocaleString('zh-CN')
+                lastMessageTime: timestamp
               };
             }
             return s;
@@ -2600,7 +2623,7 @@
           sessionId: sessionId,
           position: sessionPosition,
           content: replyText,
-          timestamp: hrReply.timestamp
+          timestamp: timestamp
         });
 
         // 发送 HR 回复通知
@@ -2623,7 +2646,7 @@
         updateAppData(prev => {
           const updatedSessions = prev.humanSessions.map(s => {
             if (s.id === sessionId) {
-              return { ...s, status: 'closed', closed_at: new Date().toLocaleString('zh-CN') };
+              return { ...s, status: 'closed', closed_at: new Date().toISOString() };
             }
             return s;
           });
@@ -2827,8 +2850,8 @@
                             </div>
                             <p className="text-xs text-slate-400 font-mono">{session.id}</p>
                             <p className="text-xs text-slate-400 mt-1">
-                              创建于 {session.created_at}
-                              {session.replied_at && <span> · 回复于 {session.replied_at}</span>}
+                              创建于 {formatTimestamp(session.created_at)}
+                              {session.replied_at && <span> · 回复于 {formatTimestamp(session.replied_at)}</span>}
                             </p>
                           </div>
                         </div>
@@ -2852,8 +2875,8 @@
                             {userMessages.length} 条留言 / {hrReplies.length} 条回复
                           </p>
                           <p className="text-xs text-slate-400 mt-1">
-                            创建于 {session.created_at}
-                            {session.replied_at && <span> · 回复于 {session.replied_at}</span>}
+                            创建于 {formatTimestamp(session.created_at)}
+                            {session.replied_at && <span> · 回复于 {formatTimestamp(session.replied_at)}</span>}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -2899,7 +2922,7 @@
                                       <div className="flex-1">
                                         <div className="flex items-center gap-2 mb-1">
                                           <span className="text-sm font-medium text-slate-700">候选人</span>
-                                          <span className="text-xs text-slate-400">{msg.timestamp}</span>
+                                          <span className="text-xs text-slate-400">{formatTimestamp(msg.timestamp)}</span>
                                         </div>
                                         <div className="bg-white rounded-lg rounded-tl-sm px-3 py-2 border">
                                           <p className="text-sm text-slate-600 whitespace-pre-wrap">{msg.content}</p>
@@ -2917,7 +2940,7 @@
                                       <div className="flex-1">
                                         <div className="flex items-center gap-2 mb-1">
                                           <span className="text-sm font-medium text-green-700">HR 同事</span>
-                                          <span className="text-xs text-slate-400">{msg.timestamp}</span>
+                                          <span className="text-xs text-slate-400">{formatTimestamp(msg.timestamp)}</span>
                                         </div>
                                         <div className="bg-green-50 rounded-lg rounded-tl-sm px-3 py-2 border border-green-200">
                                           <p className="text-sm text-slate-700 whitespace-pre-wrap">{msg.content}</p>
